@@ -172,6 +172,7 @@ let layoutRunner = null;
 let layoutTimeout = null;
 let draggingNode = null;
 let draggingMoved = false;
+let dragResumeLayout = false;
 let suppressClickUntil = 0;
 let effectFrame = null;
 let effectLastTs = 0;
@@ -191,12 +192,30 @@ const RELATION_PULSE_COLORS = {
   default: '#2db7f5'
 };
 
-const NOVERLAP_SETTINGS = {
-  maxIterations: 30,
-  ratio: 1.08,
-  margin: 8,
-  expansion: 1.04
-};
+function getNoverlapSettings(nodeCount) {
+  if (nodeCount <= 500) {
+    return {
+      maxIterations: 160,
+      ratio: 1.85,
+      margin: 18,
+      expansion: 1.22
+    };
+  }
+  if (nodeCount <= 2500) {
+    return {
+      maxIterations: 120,
+      ratio: 1.42,
+      margin: 12,
+      expansion: 1.14
+    };
+  }
+  return {
+    maxIterations: 30,
+    ratio: 1.08,
+    margin: 8,
+    expansion: 1.04
+  };
+}
 
 function hexToRgb(hex) {
   const matched = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex || '');
@@ -236,13 +255,39 @@ function brightenColor(hex, factor = 1.35) {
 }
 
 function getFA2Settings(nodeCount) {
-  const isSmall = nodeCount < 500;
-  const isMedium = nodeCount >= 500 && nodeCount < 2000;
+  if (nodeCount <= 500) {
+    return {
+      gravity: 0.0015,
+      scalingRatio: 480,
+      slowDown: 16,
+      barnesHutOptimize: false,
+      barnesHutTheta: 0.5,
+      strongGravityMode: false,
+      outboundAttractionDistribution: true,
+      linLogMode: true,
+      adjustSizes: true,
+      edgeWeightInfluence: 0
+    };
+  }
+  if (nodeCount <= 2500) {
+    return {
+      gravity: 0.01,
+      scalingRatio: 260,
+      slowDown: 10,
+      barnesHutOptimize: false,
+      barnesHutTheta: 0.6,
+      strongGravityMode: false,
+      outboundAttractionDistribution: true,
+      linLogMode: true,
+      adjustSizes: true,
+      edgeWeightInfluence: 0.02
+    };
+  }
   const isLarge = nodeCount >= 2000 && nodeCount < 10000;
   return {
-    gravity: isSmall ? 0.72 : isMedium ? 0.44 : isLarge ? 0.28 : 0.14,
-    scalingRatio: isSmall ? 22 : isMedium ? 40 : isLarge ? 68 : 100,
-    slowDown: isSmall ? 1.2 : isMedium ? 2 : isLarge ? 3.5 : 5.2,
+    gravity: isLarge ? 0.24 : 0.14,
+    scalingRatio: isLarge ? 76 : 110,
+    slowDown: isLarge ? 3.8 : 5.6,
     barnesHutOptimize: nodeCount > 220,
     barnesHutTheta: isLarge ? 1 : 0.85,
     strongGravityMode: false,
@@ -254,16 +299,15 @@ function getFA2Settings(nodeCount) {
 }
 
 function getLayoutDuration(nodeCount) {
+  if (nodeCount <= 2500) return 0;
   if (nodeCount > 10000) return 16000;
   if (nodeCount > 5000) return 12000;
-  if (nodeCount > 2000) return 10000;
-  if (nodeCount > 1000) return 9000;
-  return 7000;
+  return 10000;
 }
 
 function getInitialLayoutDuration(nodeCount) {
   if (nodeCount > 2500) return 5000;
-  return getLayoutDuration(nodeCount);
+  return 0;
 }
 
 function rebuildNeighborSet(nodeId, targetRef) {
@@ -367,13 +411,13 @@ function drawSelectedEdgeFlow(ctx, ts) {
     const tp = renderer.graphToViewport({x: t.x, y: t.y});
     const seed = selectedEdgeSeedMap.value.get(edgeKey) || 0;
     const p = ((ts * 0.00055) + seed) % 1;
-    const q = 0.12;
+    const q = 0.2;
     const x = sp.x + (tp.x - sp.x) * p;
     const y = sp.y + (tp.y - sp.y) * p;
     const nx = sp.x + (tp.x - sp.x) * Math.min(1, p + q);
     const ny = sp.y + (tp.y - sp.y) * Math.min(1, p + q);
     const ang = Math.atan2(ny - y, nx - x);
-    const len = 8;
+    const len = 12;
     ctx.save();
     ctx.translate(x, y);
     ctx.rotate(ang);
@@ -623,7 +667,7 @@ function stopLayout(applyOverlapFix = true) {
     layoutRunner = null;
   }
   if (applyOverlapFix && graph) {
-    noverlap.assign(graph, NOVERLAP_SETTINGS);
+    noverlap.assign(graph, getNoverlapSettings(graph.order));
     renderer?.refresh();
   }
   isLayoutRunning.value = false;
@@ -632,6 +676,9 @@ function stopLayout(applyOverlapFix = true) {
 function runLayout(initial = false) {
   if (!graph || graph.order === 0 || !renderer) return;
   stopLayout(false);
+  if (graph.order <= 2500) {
+    noverlap.assign(graph, getNoverlapSettings(graph.order));
+  }
   const settings = {
     ...forceAtlas2.inferSettings(graph),
     ...getFA2Settings(graph.order)
@@ -639,9 +686,14 @@ function runLayout(initial = false) {
   layoutRunner = new FA2Layout(graph, {settings});
   layoutRunner.start();
   isLayoutRunning.value = true;
-  layoutTimeout = setTimeout(() => {
-    stopLayout(true);
-  }, initial ? getInitialLayoutDuration(graph.order) : getLayoutDuration(graph.order));
+  const duration = initial ? getInitialLayoutDuration(graph.order) : getLayoutDuration(graph.order);
+  if (duration > 0) {
+    layoutTimeout = setTimeout(() => {
+      stopLayout(true);
+    }, duration);
+  } else {
+    layoutTimeout = null;
+  }
 }
 
 function toggleLayout() {
@@ -790,7 +842,8 @@ function bindGraphEvents() {
   renderer.on('downNode', ({node}) => {
     draggingNode = node;
     draggingMoved = false;
-    stopLayout(false);
+    dragResumeLayout = isLayoutRunning.value;
+    if (dragResumeLayout) stopLayout(false);
     if (!renderer.getCustomBBox()) renderer.setCustomBBox(renderer.getBBox());
   });
 
@@ -813,6 +866,10 @@ function bindGraphEvents() {
     draggingNode = null;
     draggingMoved = false;
     renderer.setCustomBBox(null);
+    if (dragResumeLayout) {
+      dragResumeLayout = false;
+      runLayout(false);
+    }
     if (animationEnabled.value && (selectedNodeId.value || hoveredNodeId.value)) drawEffectFrame();
     renderer.refresh();
   });

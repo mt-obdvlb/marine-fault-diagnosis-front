@@ -234,7 +234,9 @@ export function buildKnowledgeRelationGraphData(normalizedList = [], options = {
 
     const nodeProgressStep = Math.max(1, Math.floor(rows.length / 40));
     const goldenAngle = Math.PI * (3 - Math.sqrt(5));
-    const spread = Math.max(80, Math.sqrt(Math.max(rows.length, 1)) * 22);
+    const count = Math.max(rows.length, 1);
+    const spreadFactor = count < 500 ? 46 : 30;
+    const spread = Math.max(120, Math.sqrt(count) * spreadFactor);
     const jitter = spread * 0.08;
     rows.forEach((item, idx) => {
         if (g.hasNode(item.entryId)) return;

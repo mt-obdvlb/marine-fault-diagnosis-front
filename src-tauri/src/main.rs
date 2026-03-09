@@ -116,7 +116,8 @@ fn compute_graph_layout(payload: LayoutPayload) -> LayoutResult {
     let rows = payload.rows;
     let n = rows.len().max(1) as f64;
     let golden_angle = std::f64::consts::PI * (3.0 - 5.0f64.sqrt());
-    let spread = (n.sqrt() * 28.0).max(80.0);
+    let spread_factor = if rows.len() < 500 { 46.0 } else { 30.0 };
+    let spread = (n.sqrt() * spread_factor).max(120.0);
     let jitter = spread * 0.08;
 
     let mut positions: HashMap<String, NodePos> = HashMap::with_capacity(rows.len());
@@ -272,7 +273,8 @@ fn compute_graph_projection(payload: ProjectionPayload) -> ProjectionResult {
 
     let n = rows.len().max(1) as f64;
     let golden_angle = std::f64::consts::PI * (3.0 - 5.0f64.sqrt());
-    let spread = (n.sqrt() * 28.0).max(80.0);
+    let spread_factor = if rows.len() < 500 { 46.0 } else { 30.0 };
+    let spread = (n.sqrt() * spread_factor).max(120.0);
     let jitter = spread * 0.08;
 
     let mut nodes: Vec<ProjectionNode> = Vec::with_capacity(rows.len());
