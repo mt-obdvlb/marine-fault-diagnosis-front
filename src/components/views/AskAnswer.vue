@@ -173,6 +173,10 @@
                    style='margin-right: 15px;'
                    title='复制答案为markdown'
                    @click='copy(msg.text)'>
+              <span v-if="msg.status!=='unfinished'&&msg.id"
+                    class='questionTextButton buttonEffect'
+                    title='查看该条问答参考文献'
+                    @click='viewSingleQaReferences(msg)'>查看参考</span>
               <img v-if="msg.status!=='unfinished'"
                    class='questionBarButton buttonEffect'
                    src='/icon/del.svg' title='删除'
@@ -208,6 +212,12 @@
                          :title='file.name'
                          class='filesItem'
                          target='_blank'>{{ file.name }}</a>
+                      <div
+                        v-if='msg.ref_html||msg.ref_html_url'
+                        class='filesItem filesItemButton buttonEffect'
+                        @click='viewSingleQaReferences(msg)'>
+                        在应用内查看参考文献
+                      </div>
                     </div>
                   </div>
                 </div>
@@ -215,6 +225,36 @@
             </div>
           </div>
         </div>
+      </div>
+      <div v-show='referencePreview.visible'
+           :style='referencePaneStyle'
+           class='referencePane'>
+        <div class='referenceToolbar'>
+          <div class='referenceTitle'
+               :title='referencePreview.title'>
+            {{ referencePreview.title || '参考文献' }}
+          </div>
+          <div class='referenceActions'>
+            <a v-if='referencePreview.url'
+               :href='referencePreview.url'
+               class='buttonEffect'
+               target='_blank'>新窗口打开</a>
+            <span class='buttonEffect'
+                  @click='referencePreview.visible=false'>关闭</span>
+          </div>
+        </div>
+        <div v-if='referencePreview.loading' class='referenceEmpty'>参考文献加载中...</div>
+        <div v-else-if='referencePreview.error' class='referenceEmpty'>{{ referencePreview.error }}</div>
+        <iframe v-if='referencePreview.html'
+                :srcdoc='referencePreview.html'
+                class='referenceFrame'></iframe>
+        <iframe v-else-if='referencePreview.url'
+                :src='referencePreview.url'
+                class='referenceFrame'></iframe>
+        <div v-else class='referenceEmpty'>暂无可展示内容</div>
+        <div class='referenceResizeHandle'
+             title='拖拽调整参考面板高度'
+             @mousedown='startResizeReferencePane'></div>
       </div>
       <div
         :class="['requestArea',{'hasContent':currentChat.messages.length>0||currentChat.status=='unload'}]">
@@ -253,7 +293,8 @@ import {
   reactive,
   computed,
   watch,
-  nextTick
+  nextTick,
+  onBeforeUnmount
 } from 'vue';
 import eventBus from '@/utils/eventBus';
 import {screen, API_SERVER_URL} from '@/utils/GLO';
@@ -290,8 +331,23 @@ const chatClasses = reactive([
 const inputTextarea = ref()
 const answers = ref()
 const chatMenu = ref()
+const supportsWorker = typeof Worker !== 'undefined'
 
-const SupportExport = Blob && URL.createObjectURL && URL.revokeObjectURL
+const SupportExport = typeof Blob !== 'undefined' &&
+  typeof URL !== 'undefined' &&
+  typeof URL.createObjectURL === 'function' &&
+  typeof URL.revokeObjectURL === 'function'
+const referencePreview = reactive({
+  visible: false,
+  title: '',
+  html: '',
+  url: '',
+  loading: false,
+  error: ''
+})
+const referencePaneHeight = ref(320)
+const referencePaneStyle = computed(() => ({height: `${referencePaneHeight.value}px`}))
+let referencePaneResizeCleanup = null
 const isAllFold = computed(() => currentChat.value.messages.every((msg) => msg.fold))
 const chatsBarActive = ref(false)
 watch(allChats, () => {
@@ -357,6 +413,49 @@ function toApiUrl(path) {
   return `${API_SERVER_URL}${path.startsWith('/') ? path : `/${path}`}`
 }
 
+async function fetchReferenceHtmlByUrl(url) {
+  if (!url) return ''
+  try {
+    const response = await fetch(url)
+    if (!response.ok) return ''
+    return await response.text()
+  } catch (e) {
+    console.error('reference html fetch failed', e)
+    return ''
+  }
+}
+
+function normalizeSelectedPath(path) {
+  if (!path) return ''
+  let normalized = String(path)
+  if (normalized.startsWith('file://')) {
+    normalized = decodeURIComponent(normalized.replace(/^file:\/\//, ''))
+    if (/^\/[A-Za-z]:\//.test(normalized)) normalized = normalized.slice(1)
+  }
+  return normalized
+}
+
+function startResizeReferencePane(event) {
+  event.preventDefault()
+  const startY = event.clientY
+  const startHeight = referencePaneHeight.value
+  const minHeight = 220
+  const maxHeight = Math.max(minHeight, Math.floor(window.innerHeight * 0.68))
+  const onMouseMove = (e) => {
+    const delta = e.clientY - startY
+    const height = Math.max(minHeight, Math.min(maxHeight, startHeight + delta))
+    referencePaneHeight.value = height
+  }
+  const onMouseUp = () => {
+    window.removeEventListener('mousemove', onMouseMove)
+    window.removeEventListener('mouseup', onMouseUp)
+    referencePaneResizeCleanup = null
+  }
+  window.addEventListener('mousemove', onMouseMove)
+  window.addEventListener('mouseup', onMouseUp)
+  referencePaneResizeCleanup = onMouseUp
+}
+
 function parseStreamJson(buffer) {
   const objects = []
   let start = -1
@@ -402,6 +501,7 @@ function parseStreamJson(buffer) {
 
 function changeChat(chat, closeBar = true) {
   currentChat.value = chat
+  referencePreview.visible = false
   if (chat.status == 'unload') {
     api.qaList(chat.session_id, {errorText: '会话加载失败'}).then(r => {
       if (!r) return
@@ -420,6 +520,8 @@ function changeChat(chat, closeBar = true) {
           fold: false,
           ref_files: [],
           ref_show: false,
+          ref_html: '',
+          ref_html_url: '',
           rag_sources: msg.rag_sources || []
         })
         chat.messages.push(localMsg)
@@ -623,7 +725,10 @@ function stop(chat) {
   const msgs = chat.messages
   if (msgs.length <= 0) return
   const msg = msgs[msgs.length - 1]
-  if (msg.status === 'unfinished') msg.status = 'stop'
+  if (msg.status === 'unfinished') {
+    msg.status = 'stop'
+    syncQaRenderProgress(chat, msg, msg.text.length)
+  }
 }
 
 function restream(msg, chat) {
@@ -665,6 +770,8 @@ async function genAns(question, addTo = currentChat.value) {
     fold: false,
     ref_files: [],
     ref_show: false,
+    ref_html: '',
+    ref_html_url: '',
     rag_sources: []
   })
   
@@ -745,7 +852,7 @@ function rendChat(msg, chat) {
     
     //回答停止
     function _end() {
-      if (Worker) {
+      if (supportsWorker) {
         textAddTimer.postMessage(['clearTimer'])
         updateTimer.postMessage(['clearTimer'])
       } else {
@@ -771,6 +878,7 @@ function rendChat(msg, chat) {
             console.error(text, e)
           }
         })
+        syncQaRenderProgress(chat, msg, msg.text.length)
         return
       } else if (msg.status === 'unfinished') {
         if (i < msg.answer.length) {
@@ -789,6 +897,7 @@ function rendChat(msg, chat) {
           _end()
           msg.text = text
           msg.status = 'finished'
+          syncQaRenderProgress(chat, msg, msg.text.length)
           loadReferences(msg)
         }
       }
@@ -816,7 +925,7 @@ function rendChat(msg, chat) {
     }
     
     //保证兼容性
-    if (Worker) {
+    if (supportsWorker) {
       textAddTimer = new Worker('./js/timer.js')
       updateTimer = new Worker('./js/timer.js')
       textAddTimer.onmessage = _textAdd
@@ -825,11 +934,11 @@ function rendChat(msg, chat) {
       updateTimer.postMessage(['setTimer', 1000 / FPS])
     } else {
       textAddInt = setInterval(_textAdd, 1000 / FPS)
-      updateInt = setTimeout(_update, 1000 / FPS)
+      updateInt = setInterval(_update, 1000 / FPS)
     }
   } else {
     function _end() {
-      if (Worker) updateTimer.postMessage(['clearTimer'])
+      if (supportsWorker) updateTimer.postMessage(['clearTimer'])
       else clearInterval(updateInt)
     }
     
@@ -838,6 +947,7 @@ function rendChat(msg, chat) {
         _end()
         msg.text = msg.answer
         msg.status = 'finished'
+        syncQaRenderProgress(chat, msg, msg.text.length)
         loadReferences(msg)
         return
       }
@@ -852,6 +962,7 @@ function rendChat(msg, chat) {
             console.error(text, e)
           }
         })
+        syncQaRenderProgress(chat, msg, msg.text.length)
         return
       }
       if (msg.text != msg.answer) {
@@ -863,28 +974,38 @@ function rendChat(msg, chat) {
       }
     }
     
-    if (Worker) {
+    if (supportsWorker) {
       updateTimer = new Worker('./js/timer.js')
       updateTimer.onmessage = _update
       updateTimer.postMessage(['setTimer', 1000 / FPS])
     } else {
-      updateInt = setTimeout(_update, 1000 / FPS)
+      updateInt = setInterval(_update, 1000 / FPS)
     }
   }
 }
 
 function loadReferences(msg) {
   if (!msg.id) return
-  api.referenceGet(msg.id, {
+  return api.referenceGet(msg.id, {
     errorText: '参考资料获取失败',
     onError(text, e) {
       console.error(text, e)
     }
   }).then(r => {
     if (!r || !r.data) return
-    const docUrl = toApiUrl(r.data.doc_url || '')
+    const docUrl = toApiUrl(r.data.html_url || '')
+    msg.ref_html_url = docUrl
+    msg.ref_html = r.data.html || ''
     let files = []
-    if (docUrl) {
+    ;(r.data.reference_files || []).forEach((file, index) => {
+      const url = toApiUrl(file?.url || docUrl)
+      if (!url) return
+      files.push({
+        name: file?.name || `参考资料${index + 1}`,
+        url
+      })
+    })
+    if (files.length <= 0 && docUrl) {
       files.push({
         name: '参考资料页面',
         url: docUrl
@@ -906,6 +1027,57 @@ function loadReferences(msg) {
       })
     })
     msg.ref_files = files
+    if (!msg.ref_html && docUrl) {
+      fetchReferenceHtmlByUrl(docUrl).then((html) => {
+        if (html) msg.ref_html = html
+      })
+    }
+    return {
+      html: msg.ref_html,
+      url: msg.ref_html_url,
+      files: msg.ref_files
+    }
+  })
+}
+
+function syncQaRenderProgress(chat, msg, numRender = msg?.text?.length || 0) {
+  if (!chat?.session_id || !msg?.id) return
+  return api.qaUpdate({
+    session_id: chat.session_id,
+    question_id: msg.id,
+    num_render: String(numRender)
+  }, {
+    onError(text, e) {
+      console.error(text, e)
+    }
+  })
+}
+
+function viewSingleQaReferences(msg) {
+  referencePreview.title = msg?.question || '参考文献'
+  referencePreview.visible = true
+  referencePreview.loading = true
+  referencePreview.error = ''
+  referencePreview.html = ''
+  referencePreview.url = ''
+  loadReferences(msg)?.then((data) => {
+    referencePreview.loading = false
+    referencePreview.url = data?.url || msg.ref_html_url || msg.ref_files?.[0]?.url || ''
+    referencePreview.html = data?.html || msg.ref_html || ''
+    if (!referencePreview.html && !referencePreview.url) {
+      referencePreview.error = '该条问答暂无参考文献'
+      return
+    }
+    if (!referencePreview.html && referencePreview.url) {
+      fetchReferenceHtmlByUrl(referencePreview.url).then((html) => {
+        if (!html) return
+        msg.ref_html = html
+        referencePreview.html = html
+      })
+    }
+  }).catch(() => {
+    referencePreview.loading = false
+    referencePreview.error = '参考文献加载失败'
   })
 }
 
@@ -929,6 +1101,9 @@ function remove(chat, msg, confirm = false) {
       })
     }
     chat.messages.splice(index, 1)
+    if (referencePreview.title === msg.question && chat.messages.length <= 0) {
+      referencePreview.visible = false
+    }
     return index
   }
   
@@ -963,14 +1138,16 @@ async function copy(text) {
   eventBus.emit('dialog', {text: '复制成功'})
 }
 
-function exportChat(chat, format) {
+async function exportChat(chat, format) {
   if (chat.messages.length <= 0) return
   let data = null, ext = ''
+  let mime = 'text/plain;charset=utf-8'
   if (format === 'markdown') {
     ext = '.md'
+    mime = 'text/markdown;charset=utf-8'
     data = ''
     chat.messages.forEach(msg => {
-      if (msg.status != 'finished') return
+      if (msg.status === 'unfinished' || !msg.text) return
       data += `**${msg.question}**\n\n`
       data += msg.text + '\n\n'
       if (msg.ref_files.length > 0) {
@@ -983,7 +1160,8 @@ function exportChat(chat, format) {
     })
   } else if (format === 'json') {
     ext = '.json'
-    let msgs = chat.messages.filter(msg => msg.status == 'finished').map(msg => ({
+    mime = 'application/json;charset=utf-8'
+    let msgs = chat.messages.filter(msg => msg.status !== 'unfinished' && msg.text).map(msg => ({
       question: msg.question,
       question_id: msg.id,
       answer: msg.text,
@@ -998,17 +1176,53 @@ function exportChat(chat, format) {
     data = JSON.stringify(session)
   }
   if (data) {
-    let _a = document.createElement('a')
-    data = new Blob([data])
-    let url = URL.createObjectURL(data)
-    _a.href = url
-    _a.download = `${chat.session_id}${ext}`
-    _a.click()
-    URL.revokeObjectURL(url)
+    const defaultFileName = `${chat.session_id}${ext}`
+    let exported = false
+    try {
+      const [{save}, {invoke}] = await Promise.all([
+        import('@tauri-apps/plugin-dialog'),
+        import('@tauri-apps/api/core')
+      ])
+      const filePath = await save({
+        defaultPath: defaultFileName,
+        filters: [{
+          name: format === 'json' ? 'JSON 文件' : 'Markdown 文件',
+          extensions: [ext.replace('.', '')]
+        }]
+      })
+      if (filePath) {
+        await invoke('save_text_file', {
+          path: normalizeSelectedPath(filePath),
+          content: data
+        })
+        exported = true
+      }
+    } catch (e) {
+      console.warn('tauri save failed, fallback to browser download', e)
+    }
+    if (!exported) {
+      let _a = document.createElement('a')
+      _a.style.display = 'none'
+      document.body.appendChild(_a)
+      const blob = new Blob([data], {type: mime})
+      let url = URL.createObjectURL(blob)
+      _a.href = url
+      _a.download = defaultFileName
+      _a.click()
+      document.body.removeChild(_a)
+      URL.revokeObjectURL(url)
+      exported = true
+    }
+    if (exported) eventBus.emit('dialog', {text: '导出成功'})
+  } else {
+    eventBus.emit('dialog', {text: '没有可导出的问答内容'})
   }
 }
 
 loadChats()
+onBeforeUnmount(() => {
+  if (referencePaneResizeCleanup) referencePaneResizeCleanup()
+})
 
 </script>
 
@@ -1357,6 +1571,78 @@ loadChats()
   max-height: 100%;
 }
 
+.referencePane {
+  width: 100%;
+  max-width: 800px;
+  margin: 10px 0 0 0;
+  min-height: 220px;
+  border: 2px solid var(--subBgColor);
+  border-radius: 12px;
+  background: linear-gradient(180deg, var(--subBgColor2), var(--bgColor) 120px);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.12);
+  position: relative;
+}
+
+.referenceToolbar {
+  border-bottom: 1px solid var(--subBgColor);
+  padding: 10px 12px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.referenceTitle {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.referenceActions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  white-space: nowrap;
+}
+
+.referenceActions span, .referenceActions a {
+  color: var(--header-item);
+  text-decoration: none;
+  cursor: pointer;
+  border: 1px solid var(--subBgColor);
+  border-radius: 999px;
+  padding: 4px 10px;
+  background: var(--bgColor);
+  font-size: 12px;
+}
+
+.referenceFrame {
+  width: 100%;
+  height: 100%;
+  border: none;
+  min-height: 0;
+  flex: 1;
+}
+
+.referenceEmpty {
+  color: var(--holder-color);
+  padding: 24px;
+  text-align: center;
+  font-size: 13px;
+}
+
+.referenceResizeHandle {
+  height: 12px;
+  cursor: ns-resize;
+  border-top: 1px dashed var(--subBgColor);
+  background: linear-gradient(180deg, transparent, var(--subBgColor2));
+  flex-shrink: 0;
+}
+
 .toolbar {
   width: 100%;
   text-align: center;
@@ -1454,6 +1740,8 @@ loadChats()
 .questionBar {
   display: flex;
   overflow: hidden;
+  align-items: center;
+  gap: 6px;
 }
 
 .question {
@@ -1488,6 +1776,20 @@ loadChats()
   height: 25px;
   cursor: pointer;
   user-select: none;
+}
+
+.questionTextButton {
+  margin-right: 6px;
+  font-size: 12px;
+  color: var(--bgColor);
+  background: linear-gradient(90deg, var(--header-item), var(--header-item-active));
+  border-radius: 999px;
+  padding: 3px 9px;
+  cursor: pointer;
+  white-space: nowrap;
+  font-weight: 600;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.2);
+  text-decoration: none;
 }
 
 .thinking {
@@ -1604,6 +1906,10 @@ loadChats()
 
 .filesItem:hover {
   color: rgb(0, 162, 255);
+}
+
+.filesItemButton {
+  cursor: pointer;
 }
 
 .relQues {
@@ -1739,6 +2045,11 @@ loadChats()
 }
 
 @media (max-width: 720px) {
+  .referencePane {
+    width: calc(100% - 16px);
+    min-height: 180px;
+  }
+  
   .requestHint {
     flex-wrap: wrap;
   }

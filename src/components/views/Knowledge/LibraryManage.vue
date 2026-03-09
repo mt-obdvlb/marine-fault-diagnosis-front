@@ -35,20 +35,12 @@
              placeholder='查找：知识编号 / 描述 / 标签'
              type='text'
              @keyup.enter='applyFilters'>
-      <select v-model='filters.type' class='input small'
-              @change='applyFilters'>
-        <option value=''>全部来源</option>
-        <option v-for='t in typeOptions' :key='t'
-                :value='t'>{{ getTypeText(t) }}
-        </option>
-      </select>
-      <select v-model='filters.label' class='input'
-              @change='applyFilters'>
-        <option value=''>全部标签</option>
-        <option v-for='label in labelOptions' :key='label'
-                :value='label'>{{ label }}
-        </option>
-      </select>
+      <UiSelect v-model='filters.type' :options='typeSelectOptions'
+                class='input small'
+                @change='applyFilters' />
+      <UiSelect v-model='filters.label' :options='labelSelectOptions'
+                class='input'
+                @change='applyFilters' />
       <div class='text buttonEffect' @click='reloadData'>
         刷新
       </div>
@@ -120,12 +112,9 @@
     <div class='pager'>
       <div>共 {{ pagination.total }} 条</div>
       <div class='pagerRight'>
-        <select v-model.number='pageSize' class='input mini'
-                @change='applyFilters'>
-          <option :value='20'>20/页</option>
-          <option :value='50'>50/页</option>
-          <option :value='100'>100/页</option>
-        </select>
+        <UiSelect v-model='pageSize' :options='pageSizeOptions'
+                  class='input mini'
+                  @change='applyFilters' />
         <button :disabled='page<=1' class='pageBtn'
                 @click='goPrev'>上一页
         </button>
@@ -142,10 +131,11 @@
 </template>
 
 <script setup>
-import {reactive, ref} from 'vue';
+import {computed, reactive, ref} from 'vue';
 import eventBus from '@/utils/eventBus';
 import {settings} from '@/utils/Settings';
 import api from '@/utils/api';
+import UiSelect from '@/components/ui/UiSelect.vue';
 import {
   buildKnowledgeOverview,
   collectKnowledgeFacets,
@@ -170,6 +160,19 @@ const page = ref(1);
 const pageSize = ref(20);
 const labelOptions = ref([]);
 const typeOptions = ref([]);
+const pageSizeOptions = [
+  {label: '20/页', value: 20},
+  {label: '50/页', value: 50},
+  {label: '100/页', value: 100}
+];
+const typeSelectOptions = computed(() => [
+  {label: '全部来源', value: ''},
+  ...typeOptions.value.map((t) => ({label: getTypeText(t), value: t}))
+]);
+const labelSelectOptions = computed(() => [
+  {label: '全部标签', value: ''},
+  ...labelOptions.value.map((label) => ({label, value: label}))
+]);
 
 const filters = reactive({
   keyword: '',

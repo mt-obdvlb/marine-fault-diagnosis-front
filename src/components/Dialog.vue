@@ -5,8 +5,7 @@
         {{ t }}
       </div>
       <div class="checkbox" v-show="c">
-        <label for="dialogCheckbox">{{ c }}</label>
-        <input id="dialogCheckbox" type="checkbox" v-model="cv">
+        <UiCheckbox v-model="cv">{{ c }}</UiCheckbox>
       </div>
       <div v-if="buttonType==='yes_no'" class="buttons">
         <div class="yes buttonEffect" @click="click('yes')">是</div>
@@ -22,6 +21,7 @@
 <script setup>
 import { shallowRef } from 'vue';
 import eventBus from '@/utils/eventBus';
+import UiCheckbox from '@/components/ui/UiCheckbox.vue';
 const active=shallowRef(false),t=shallowRef(""),c=shallowRef(""),cv=shallowRef(true),buttonType=shallowRef('ok')
 let func={}
 /**
@@ -105,18 +105,10 @@ function click(decision){
 
 .checkbox label {
   color: var(--text-color);
-  cursor: pointer;
   font-size: 14px;
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 8px;
-}
-
-.checkbox input[type="checkbox"] {
-  width: 16px;
-  height: 16px;
-  cursor: pointer;
 }
 
 .buttons {

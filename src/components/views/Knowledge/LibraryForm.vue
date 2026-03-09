@@ -7,13 +7,9 @@
 
         <div class="formCard">
             <div class="row">
-                <select v-model="form.label" class="input">
-                    <option v-for="label in labelOptions" :key="label" :value="label">{{ label }}</option>
-                </select>
+                <UiSelect v-model="form.label" :options="labelSelectOptions" class="input" />
                 <input v-model.trim="form.identifier" class="input" type="text" placeholder="知识编号，例如：R0437">
-                <select v-model="form.type" class="input small">
-                    <option v-for="dbType in DB_TYPE_OPTIONS" :key="dbType.value" :value="dbType.value">{{ dbType.text }}</option>
-                </select>
+                <UiSelect v-model="form.type" :options="dbTypeOptions" class="input small" />
             </div>
 
             <textarea
@@ -45,23 +41,19 @@
             </div>
 
             <div class="row compact">
-                <select v-model="uploadMeta.type" class="input small">
-                    <option v-for="dbType in DB_TYPE_OPTIONS" :key="dbType.value" :value="dbType.value">{{ dbType.text }}</option>
-                </select>
-                <select v-model="uploadMeta.label" class="input">
-                    <option value="">导入默认标签（可选）</option>
-                    <option v-for="label in labelOptions" :key="label" :value="label">{{ label }}</option>
-                </select>
+                <UiSelect v-model="uploadMeta.type" :options="dbTypeOptions" class="input small" />
+                <UiSelect v-model="uploadMeta.label" :options="uploadLabelOptions" class="input" />
             </div>
         </div>
     </div>
 </template>
 
 <script setup>
-import { reactive, ref } from 'vue';
+import { computed, reactive, ref } from 'vue';
 import eventBus from '@/utils/eventBus';
 import api from '@/utils/api';
 import { LABEL_OPTIONS, RELATION_TARGET_LABEL } from '@/utils/knowledge';
+import UiSelect from '@/components/ui/UiSelect.vue';
 
 const loading = ref(false);
 const fileSelector = ref();
@@ -75,6 +67,18 @@ const relationOptions = Object.entries(RELATION_TARGET_LABEL).map(([key, label])
     label,
     example: key === 'relationship_solution' ? 'S0437' : 'C0437'
 }));
+const labelSelectOptions = computed(() => labelOptions.map((label) => ({
+    label,
+    value: label
+})));
+const dbTypeOptions = computed(() => DB_TYPE_OPTIONS.map((dbType) => ({
+    label: dbType.text,
+    value: dbType.value
+})));
+const uploadLabelOptions = computed(() => [
+    { label: '导入默认标签（可选）', value: '' },
+    ...labelOptions.map((label) => ({ label, value: label }))
+]);
 
 function createEmptyForm() {
     return {

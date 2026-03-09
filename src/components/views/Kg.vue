@@ -34,35 +34,32 @@
     <div class='filterBar'>
       <div class='filterGroup'>
         <div class='groupTitle'>label 筛选</div>
-        <label v-for='label in labelOptions' :key='label'
-               class='checkItem'>
-          <input :checked='selectedLabels.has(label)'
-                 type='checkbox'
-                 @change='toggleLabel(label)'>
-          <span>{{ label }}</span>
-        </label>
+        <UiCheckbox v-for='label in labelOptions' :key='label'
+                    :model-value='selectedLabels.has(label)'
+                    class='checkItem'
+                    @change='toggleLabel(label)'>
+          {{ label }}
+        </UiCheckbox>
       </div>
       
       <div class='filterGroup'>
         <div class='groupTitle'>数据库类型</div>
-        <label v-for='dbType in typeOptions' :key='dbType'
-               class='checkItem'>
-          <input :checked='selectedTypes.has(dbType)'
-                 type='checkbox'
-                 @change='toggleType(dbType)'>
-          <span>{{
+        <UiCheckbox v-for='dbType in typeOptions' :key='dbType'
+                    :model-value='selectedTypes.has(dbType)'
+                    class='checkItem'
+                    @change='toggleType(dbType)'>
+          {{
               dbType === 'static' ? '内置' : '用户'
-            }}</span>
-        </label>
+            }}
+        </UiCheckbox>
       </div>
       
       <div class='filterGroup compact'>
         <div class='groupTitle'>显示控制</div>
-        <label class='checkItem'>
-          <input v-model='showNodeLabel' type='checkbox'
-                 @change='refreshRender'>
-          <span>显示节点标签</span>
-        </label>
+        <UiCheckbox v-model='showNodeLabel' class='checkItem'
+                    @change='refreshRender'>
+          显示节点标签
+        </UiCheckbox>
         <label class='colorItem'>
           主题色
           <input v-model='accentColor' type='color'
@@ -96,7 +93,10 @@
       </div>
       <div>节点: {{ metrics.nodes }}</div>
       <div>关系: {{ metrics.edges }}</div>
-      <div v-if='selectedNodeId'>当前焦点: {{ selectedNodeId }}</div>
+      <div v-if='selectedNodeId' class='focusTip'>
+        <span>当前焦点: {{ selectedNodeLabel || selectedNodeId }}</span>
+        <button class='closeFocusBtn' @click='clearSelection'>关闭</button>
+      </div>
       <div>label种类: {{ metrics.labels }}</div>
       <div>库类型: {{ metrics.types }}</div>
       <div v-if='metrics.truncated' class='warn'>
@@ -117,12 +117,17 @@ import EdgeCurveProgram from '@sigma/edge-curve';
 import {
   DB_TYPE_OPTIONS,
   LABEL_OPTIONS,
+  buildKnowledgeRelationGraphFromProjection,
   buildKnowledgeRelationGraphData,
   collectKnowledgeFacets,
   fetchAllKnowledges,
   normalizeKnowledgeList
 } from '@/utils/knowledge.js';
-import {computeGraphLayoutWithRust} from '@/utils/tauriGraphLayout.js';
+import {
+  computeGraphLayoutWithRust,
+  computeGraphProjectionWithRust
+} from '@/utils/tauriGraphLayout.js';
+import UiCheckbox from '@/components/ui/UiCheckbox.vue';
 
 const graphEl = ref(null);
 const graphWrapEl = ref(null);
@@ -142,6 +147,7 @@ const metrics = ref({
 const showNodeLabel = ref(true);
 const accentColor = ref('#1677ff');
 const selectedNodeId = ref('');
+const selectedNodeLabel = ref('');
 const hoveredNodeId = ref('');
 const isLayoutRunning = ref(false);
 const animationEnabled = ref(true);
@@ -165,6 +171,8 @@ let renderer = null;
 let layoutRunner = null;
 let layoutTimeout = null;
 let draggingNode = null;
+let draggingMoved = false;
+let suppressClickUntil = 0;
 let effectFrame = null;
 let effectLastTs = 0;
 const selectedNeighborSet = ref(new Set());
@@ -253,6 +261,11 @@ function getLayoutDuration(nodeCount) {
   return 7000;
 }
 
+function getInitialLayoutDuration(nodeCount) {
+  if (nodeCount > 2500) return 5000;
+  return getLayoutDuration(nodeCount);
+}
+
 function rebuildNeighborSet(nodeId, targetRef) {
   const next = new Set();
   if (graph && nodeId && graph.hasNode(nodeId)) {
@@ -309,13 +322,14 @@ function ensureFxCanvasSize() {
     fxCanvas.value.style.width = `${rect.width}px`;
     fxCanvas.value.style.height = `${rect.height}px`;
   }
-  return true;
+  return {rect, dpr};
 }
 
 function clearFxCanvas() {
   if (!fxCanvas.value) return;
   const ctx = fxCanvas.value.getContext('2d');
   if (!ctx) return;
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
   ctx.clearRect(0, 0, fxCanvas.value.width, fxCanvas.value.height);
 }
 
@@ -376,12 +390,59 @@ function drawSelectedEdgeFlow(ctx, ts) {
   });
 }
 
+function drawLabelPill(ctx, x, y, text, options = {}) {
+  const content = String(text || '').trim();
+  if (!content) return;
+  const fontSize = options.fontSize || 12;
+  const fontWeight = options.fontWeight || 600;
+  const padX = options.padX || 8;
+  const padY = options.padY || 5;
+  const radius = options.radius || 7;
+  ctx.font = `${fontWeight} ${fontSize}px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif`;
+  const width = Math.ceil(ctx.measureText(content).width) + padX * 2;
+  const height = fontSize + padY * 2;
+  const left = Math.round(x - width / 2);
+  const top = Math.round(y - height - 10);
+
+  ctx.beginPath();
+  ctx.roundRect(left, top, width, height, radius);
+  ctx.fillStyle = 'rgba(255, 255, 255, 0.96)';
+  ctx.fill();
+  ctx.lineWidth = 1;
+  ctx.strokeStyle = 'rgba(0, 0, 0, 0.18)';
+  ctx.stroke();
+
+  ctx.fillStyle = '#111';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(content, x, top + height / 2 + 0.5);
+}
+
+function drawHoverNeighborLabels(ctx) {
+  if (!renderer || !graph || !hoveredNodeId.value) return;
+  const ids = [hoveredNodeId.value, ...Array.from(hoverNeighborSet.value).slice(0, 24)];
+  ids.forEach((nodeId, idx) => {
+    if (!graph.hasNode(nodeId)) return;
+    const attrs = graph.getNodeAttributes(nodeId);
+    const label = String(attrs?.label || '').trim();
+    if (!label) return;
+    const point = renderer.graphToViewport({x: attrs.x, y: attrs.y});
+    drawLabelPill(ctx, point.x, point.y, label, {
+      fontSize: idx === 0 ? 13 : 12,
+      fontWeight: idx === 0 ? 700 : 600
+    });
+  });
+}
+
 function drawEffectFrame(ts = performance.now()) {
   if (!renderer || !graph || !animationEnabled.value) return;
-  if (!ensureFxCanvasSize()) return;
+  const frame = ensureFxCanvasSize();
+  if (!frame) return;
   const ctx = fxCanvas.value.getContext('2d');
   if (!ctx) return;
-  ctx.clearRect(0, 0, fxCanvas.value.width, fxCanvas.value.height);
+  const {rect, dpr} = frame;
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, rect.width, rect.height);
   const hasSelection = Boolean(selectedNodeId.value);
   const hasHover = Boolean(hoveredNodeId.value);
   if (!hasSelection && !hasHover) return;
@@ -390,6 +451,7 @@ function drawEffectFrame(ts = performance.now()) {
   if (hasHover && hoveredNodeId.value !== selectedNodeId.value) {
     drawRippleAtNode(ctx, hoveredNodeId.value, ts, false);
   }
+  if (hasHover) drawHoverNeighborLabels(ctx);
 }
 
 function stopAnimationLoop() {
@@ -527,6 +589,16 @@ function refreshRender() {
   if (animationEnabled.value && (selectedNodeId.value || hoveredNodeId.value)) drawEffectFrame();
 }
 
+function clearSelection() {
+  selectedNodeId.value = '';
+  selectedNodeLabel.value = '';
+  selectedNeighborSet.value = new Set();
+  rebuildEdgeSets();
+  drawEffectFrame();
+  if (!hoveredNodeId.value) stopAnimationLoop();
+  renderer?.refresh();
+}
+
 function clearLayoutResources() {
   if (layoutTimeout) {
     clearTimeout(layoutTimeout);
@@ -557,7 +629,7 @@ function stopLayout(applyOverlapFix = true) {
   isLayoutRunning.value = false;
 }
 
-function runLayout() {
+function runLayout(initial = false) {
   if (!graph || graph.order === 0 || !renderer) return;
   stopLayout(false);
   const settings = {
@@ -569,12 +641,12 @@ function runLayout() {
   isLayoutRunning.value = true;
   layoutTimeout = setTimeout(() => {
     stopLayout(true);
-  }, getLayoutDuration(graph.order));
+  }, initial ? getInitialLayoutDuration(graph.order) : getLayoutDuration(graph.order));
 }
 
 function toggleLayout() {
   if (isLayoutRunning.value) stopLayout(true);
-  else runLayout();
+  else runLayout(false);
 }
 
 function installReducers() {
@@ -588,18 +660,23 @@ function installReducers() {
     const isHoverNeighbor = hoverNeighborSet.value.has(nodeId);
     const activeBaseColor = data.color || accentColor.value;
 
+    const originalLabel = data.label || '';
     if (!showNodeLabel.value) next.label = '';
 
     if (isSelected) {
       next.size = (data.size || 6) * 1.9;
       next.zIndex = 5;
       next.color = brightenColor(activeBaseColor, 1.4);
+      next.label = '';
+      next.forceLabel = false;
       return next;
     }
     if (selectedNodeId.value && isSelectedNeighbor) {
       next.size = (data.size || 6) * 1.34;
       next.zIndex = 4;
       next.color = activeBaseColor;
+      next.label = '';
+      next.forceLabel = false;
       return next;
     }
     if (selectedNodeId.value && !isSelected && !isSelectedNeighbor) {
@@ -613,12 +690,17 @@ function installReducers() {
       next.size = (data.size || 6) * 1.45;
       next.zIndex = 4;
       next.color = brightenColor(activeBaseColor, 1.3);
+      // Hover labels are rendered by overlay canvas pills to avoid duplicate text.
+      next.label = '';
+      next.forceLabel = false;
       return next;
     }
     if (hoveredNodeId.value && isHoverNeighbor) {
       next.size = (data.size || 6) * 1.18;
       next.zIndex = 3;
       next.color = activeBaseColor;
+      next.label = '';
+      next.forceLabel = false;
       return next;
     }
     if (hoveredNodeId.value && !isHoverNeighbor) {
@@ -688,27 +770,26 @@ function bindGraphEvents() {
   });
 
   renderer.on('clickNode', ({node}) => {
+    if (Date.now() < suppressClickUntil) return;
     selectedNodeId.value = node;
+    if (graph?.hasNode(node)) {
+      const attrs = graph.getNodeAttributes(node);
+      selectedNodeLabel.value = attrs?.desc || attrs?.label || node;
+    } else selectedNodeLabel.value = node;
     rebuildNeighborSet(node, selectedNeighborSet);
     rebuildEdgeSets();
-    const attrs = graph.getNodeAttributes(node);
-    renderer.getCamera().animate({x: attrs.x, y: attrs.y, ratio: 0.16}, {duration: 300});
     drawEffectFrame();
     if (animationEnabled.value) startAnimationLoop();
     renderer.refresh();
   });
 
   renderer.on('clickStage', () => {
-    selectedNodeId.value = '';
-    selectedNeighborSet.value = new Set();
-    rebuildEdgeSets();
-    drawEffectFrame();
-    if (!hoveredNodeId.value) stopAnimationLoop();
-    renderer.refresh();
+    clearSelection();
   });
 
   renderer.on('downNode', ({node}) => {
     draggingNode = node;
+    draggingMoved = false;
     stopLayout(false);
     if (!renderer.getCustomBBox()) renderer.setCustomBBox(renderer.getBBox());
   });
@@ -719,6 +800,7 @@ function bindGraphEvents() {
     const pos = renderer.viewportToGraph(e);
     graph.setNodeAttribute(draggingNode, 'x', pos.x);
     graph.setNodeAttribute(draggingNode, 'y', pos.y);
+    draggingMoved = true;
     if (animationEnabled.value && (selectedNodeId.value || hoveredNodeId.value)) drawEffectFrame();
     e.preventSigmaDefault();
     e.original.preventDefault();
@@ -727,7 +809,9 @@ function bindGraphEvents() {
 
   captor.on('mouseup', () => {
     if (!draggingNode) return;
+    if (draggingMoved) suppressClickUntil = Date.now() + 220;
     draggingNode = null;
+    draggingMoved = false;
     renderer.setCustomBBox(null);
     if (animationEnabled.value && (selectedNodeId.value || hoveredNodeId.value)) drawEffectFrame();
     renderer.refresh();
@@ -771,6 +855,7 @@ function initRenderer(newGraph) {
   
   graph = newGraph;
   selectedNodeId.value = '';
+  selectedNodeLabel.value = '';
   hoveredNodeId.value = '';
   selectedNeighborSet.value = new Set();
   hoverNeighborSet.value = new Set();
@@ -792,12 +877,13 @@ function initRenderer(newGraph) {
     hideLabelsOnMove: true,
     hideEdgesOnMove: true,
     allowInvalidContainer: true,
-    zIndex: true
+    zIndex: true,
+    defaultDrawNodeHover: () => {}
   });
   
   installReducers();
   bindGraphEvents();
-  runLayout();
+  runLayout(true);
   drawEffectFrame();
   requestAnimationFrame(() => {
     if (renderer) renderer.refresh();
@@ -811,35 +897,55 @@ async function applyFiltersAndRender() {
   
   try {
     const maxNodes = Math.max(allRows.value.length, 8000);
-    const layoutRows = getFilteredRowsForLayout().slice(0, maxNodes);
-    updateLoading(41, '正在构建知识图谱', '调用 Rust 计算初始布局...');
-    const rustLayout = await computeGraphLayoutWithRust(layoutRows);
-    const layoutPositions = rustLayout?.positions && typeof rustLayout.positions === 'object'
-      ? rustLayout.positions
-      : null;
-    const dominantRelTypes = rustLayout?.dominant_rel_types && typeof rustLayout.dominant_rel_types === 'object'
-      ? rustLayout.dominant_rel_types
-      : null;
-    const built = buildKnowledgeRelationGraphData(allRows.value, {
-      selectedLabels: Array.from(selectedLabels.value),
-      selectedTypes: Array.from(selectedTypes.value),
+    const maxEdges = Math.min(maxNodes * 4, 24000);
+    const selectedLabelList = Array.from(selectedLabels.value);
+    const selectedTypeList = Array.from(selectedTypes.value);
+    updateLoading(41, '正在构建知识图谱', '调用 Rust 构建节点与边...');
+    let built = null;
+
+    const projection = await computeGraphProjectionWithRust({
+      rows: allRows.value,
+      selectedLabels: selectedLabelList,
+      selectedTypes: selectedTypeList,
       keyword: searchKeyword.value,
       maxNodes,
-      maxEdges: Math.min(maxNodes * 4, 24000),
-      includeGhostNodes: false,
-      layoutPositions,
-      dominantRelTypes,
-      onProgress(info) {
-        const phaseText = {
-          filter: '筛选知识条目...',
-          nodes: '构建节点...',
-          edges: '构建关系边...'
-        };
-        const detail = phaseText[info?.phase] || '处理中...';
-        const percent = 35 + (Number(info?.percent) || 0) * 60;
-        updateLoading(percent, '正在构建知识图谱', detail);
-      }
+      maxEdges,
+      includeGhostNodes: false
     });
+
+    if (projection?.nodes && projection?.edges) {
+      built = buildKnowledgeRelationGraphFromProjection(projection);
+    } else {
+      const layoutRows = getFilteredRowsForLayout().slice(0, maxNodes);
+      updateLoading(44, '正在构建知识图谱', 'Rust 不可用，回退 JS 构图...');
+      const rustLayout = await computeGraphLayoutWithRust(layoutRows);
+      const layoutPositions = rustLayout?.positions && typeof rustLayout.positions === 'object'
+        ? rustLayout.positions
+        : null;
+      const dominantRelTypes = rustLayout?.dominant_rel_types && typeof rustLayout.dominant_rel_types === 'object'
+        ? rustLayout.dominant_rel_types
+        : null;
+      built = buildKnowledgeRelationGraphData(allRows.value, {
+        selectedLabels: selectedLabelList,
+        selectedTypes: selectedTypeList,
+        keyword: searchKeyword.value,
+        maxNodes,
+        maxEdges,
+        includeGhostNodes: false,
+        layoutPositions,
+        dominantRelTypes,
+        onProgress(info) {
+          const phaseText = {
+            filter: '筛选知识条目...',
+            nodes: '构建节点...',
+            edges: '构建关系边...'
+          };
+          const detail = phaseText[info?.phase] || '处理中...';
+          const percent = 35 + (Number(info?.percent) || 0) * 60;
+          updateLoading(percent, '正在构建知识图谱', detail);
+        }
+      });
+    }
 
     updateLoading(96, '正在渲染画布', '初始化渲染器...');
     await nextTick();
@@ -1041,7 +1147,9 @@ onBeforeUnmount(() => {
   position: relative;
   border: 1px solid var(--card-border);
   border-radius: 12px;
-  background: var(--card-bg);
+  background:
+    radial-gradient(circle at 52% 45%, rgba(124, 58, 237, 0.12) 0%, rgba(124, 58, 237, 0) 60%),
+    linear-gradient(180deg, #06060a 0%, #0b0b12 100%);
   overflow: hidden;
 }
 
@@ -1058,7 +1166,7 @@ onBeforeUnmount(() => {
 .graph {
   width: 100%;
   height: 100%;
-  border: 1px solid var(--card-border);
+  border: 1px solid color-mix(in oklab, var(--card-border) 60%, #2a2a3d);
   border-radius: 12px;
   opacity: 0;
   transform: scale(1.01);
@@ -1160,6 +1268,23 @@ onBeforeUnmount(() => {
   align-items: center;
   font-size: 12px;
   color: var(--holder-color);
+}
+
+.focusTip {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.closeFocusBtn {
+  border: 1px solid var(--card-border);
+  background: var(--subBgColor4);
+  color: var(--text-color);
+  border-radius: 999px;
+  height: 22px;
+  padding: 0 8px;
+  font-size: 11px;
+  cursor: pointer;
 }
 
 .warn {

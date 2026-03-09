@@ -23,6 +23,12 @@ function cleanText(value) {
     return String(value ?? '').trim();
 }
 
+function shortText(value, maxLen = 26) {
+    const text = cleanText(value);
+    if (!text) return '';
+    return text.length > maxLen ? `${text.slice(0, maxLen)}…` : text;
+}
+
 function toDescList(item = {}) {
     if (Array.isArray(item?.desc)) {
         return item.desc.map(cleanText).filter(Boolean);
@@ -237,7 +243,7 @@ export function buildKnowledgeRelationGraphData(normalizedList = [], options = {
         const posHint = layoutPositions?.[item.entryId];
         g.addNode(item.entryId, {
             id: item.identifier,
-            label: `${item.identifier}`,
+            label: shortText(item.desc) || `${item.identifier}`,
             subLabel: item.label,
             kind: item.label,
             dbType: item.type,
@@ -266,7 +272,7 @@ export function buildKnowledgeRelationGraphData(normalizedList = [], options = {
             if (!g.hasNode(targetNodeId)) {
                 g.addNode(targetNodeId, {
                     id: rel.targetIdentifier,
-                    label: rel.targetIdentifier,
+                    label: shortText(rel.targetIdentifier, 18) || rel.targetIdentifier,
                     subLabel: rel.relName,
                     kind: rel.relName,
                     dbType: 'unknown',
@@ -312,6 +318,59 @@ export function buildKnowledgeRelationGraphData(normalizedList = [], options = {
             edgeTypes: Array.from(edgeTypeCount.entries()).map(([name, count]) => ({ name, count }))
         },
         dominantRelTypes
+    };
+}
+
+export function buildKnowledgeRelationGraphFromProjection(projection = {}) {
+    const g = new Graph({ multi: true, type: 'directed' });
+    const nodes = Array.isArray(projection?.nodes) ? projection.nodes : [];
+    const edges = Array.isArray(projection?.edges) ? projection.edges : [];
+
+    nodes.forEach(node => {
+        if (!node?.entry_id || g.hasNode(node.entry_id)) return;
+        g.addNode(node.entry_id, {
+            id: node.id,
+            label: shortText(node.label) || shortText(node.desc) || cleanText(node.id),
+            subLabel: cleanText(node.sub_label),
+            kind: cleanText(node.kind),
+            dbType: cleanText(node.db_type),
+            desc: cleanText(node.desc),
+            x: Number(node.x) || 0,
+            y: Number(node.y) || 0,
+            size: Number(node.size) || 4,
+            color: cleanText(node.color) || '#7a7a7a',
+            searchText: cleanText(node.search_text).toLowerCase()
+        });
+    });
+
+    edges.forEach(edge => {
+        if (!edge?.key || !edge?.source || !edge?.target) return;
+        if (!g.hasNode(edge.source) || !g.hasNode(edge.target) || g.hasEdge(edge.key)) return;
+        g.addEdgeWithKey(edge.key, edge.source, edge.target, {
+            label: cleanText(edge.label),
+            relType: cleanText(edge.rel_type),
+            size: Number(edge.size) || 1,
+            color: cleanText(edge.color) || '#d0d0d0'
+        });
+    });
+
+    const metrics = projection?.metrics || {};
+    return {
+        graph: g,
+        metrics: {
+            entries: Number(metrics.entries) || 0,
+            renderedEntries: Number(metrics.rendered_entries) || 0,
+            nodes: Number(metrics.nodes) || g.order,
+            edges: Number(metrics.edges) || g.size,
+            labels: Number(metrics.labels) || 0,
+            types: Number(metrics.types) || 0,
+            matched: Number(metrics.matched) || 0,
+            truncated: Boolean(metrics.truncated),
+            edgeTypes: Array.isArray(metrics.edge_types)
+                ? metrics.edge_types.map(v => ({ name: v?.name, count: Number(v?.count) || 0 }))
+                : []
+        },
+        dominantRelTypes: projection?.dominant_rel_types || {}
     };
 }
 
