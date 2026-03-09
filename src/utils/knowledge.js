@@ -182,9 +182,16 @@ export function buildKnowledgeRelationGraphData(normalizedList = [], options = {
     const selectedLabels = new Set(options?.selectedLabels || []);
     const selectedTypes = new Set(options?.selectedTypes || []);
     const keyword = cleanText(options?.keyword).toLowerCase();
+    const onProgress = typeof options?.onProgress === 'function' ? options.onProgress : null;
     const maxNodes = Math.max(200, Number(options?.maxNodes) || 3000);
     const maxEdges = Math.max(500, Number(options?.maxEdges) || 20000);
     const includeGhostNodes = Boolean(options?.includeGhostNodes);
+    const layoutPositions = options?.layoutPositions && typeof options.layoutPositions === 'object'
+        ? options.layoutPositions
+        : null;
+    const dominantRelTypes = options?.dominantRelTypes && typeof options.dominantRelTypes === 'object'
+        ? options.dominantRelTypes
+        : null;
 
     const filteredRows = normalizedList.filter(item => {
         if (selectedLabels.size > 0 && !selectedLabels.has(item.label)) return false;
@@ -193,6 +200,7 @@ export function buildKnowledgeRelationGraphData(normalizedList = [], options = {
         return true;
     });
     const rows = filteredRows.slice(0, maxNodes);
+    if (onProgress) onProgress({ phase: 'filter', percent: 0, rows: rows.length, total: filteredRows.length });
 
     const identifierMap = new Map(rows.map(item => [item.identifier, item]));
     const labelPalette = {
@@ -218,10 +226,15 @@ export function buildKnowledgeRelationGraphData(normalizedList = [], options = {
     const edgeTypeCount = new Map();
     let edgeCount = 0;
 
+    const nodeProgressStep = Math.max(1, Math.floor(rows.length / 40));
+    const goldenAngle = Math.PI * (3 - Math.sqrt(5));
+    const spread = Math.max(80, Math.sqrt(Math.max(rows.length, 1)) * 22);
+    const jitter = spread * 0.08;
     rows.forEach((item, idx) => {
         if (g.hasNode(item.entryId)) return;
-        const angle = (Math.PI * 2 * idx) / Math.max(rows.length, 1);
-        const radius = 10 + (idx % 30) * 1.6;
+        const angle = idx * goldenAngle;
+        const radius = spread * Math.sqrt((idx + 1) / Math.max(rows.length, 1));
+        const posHint = layoutPositions?.[item.entryId];
         g.addNode(item.entryId, {
             id: item.identifier,
             label: `${item.identifier}`,
@@ -229,15 +242,20 @@ export function buildKnowledgeRelationGraphData(normalizedList = [], options = {
             kind: item.label,
             dbType: item.type,
             desc: item.desc,
-            x: Math.cos(angle) * radius,
-            y: Math.sin(angle) * radius,
+            x: Number.isFinite(Number(posHint?.x)) ? Number(posHint.x) : Math.cos(angle) * radius + (Math.random() - 0.5) * jitter,
+            y: Number.isFinite(Number(posHint?.y)) ? Number(posHint.y) : Math.sin(angle) * radius + (Math.random() - 0.5) * jitter,
             size: 5,
             color: labelPalette[item.label] || labelPalette.未分类,
             searchText: item.searchText
         });
+        if (onProgress && (idx % nodeProgressStep === 0 || idx === rows.length - 1)) {
+            const ratio = (idx + 1) / Math.max(rows.length, 1);
+            onProgress({ phase: 'nodes', percent: Math.min(0.62, 0.12 + ratio * 0.5), rows: rows.length, total: filteredRows.length });
+        }
     });
 
-    rows.forEach(item => {
+    const edgeProgressStep = Math.max(1, Math.floor(rows.length / 40));
+    rows.forEach((item, idx) => {
         item.relationTargets.forEach((rel, relIndex) => {
             if (edgeCount >= maxEdges) return;
             const target = identifierMap.get(rel.targetIdentifier);
@@ -274,6 +292,10 @@ export function buildKnowledgeRelationGraphData(normalizedList = [], options = {
             const relName = RELATION_TARGET_LABEL[rel.relType] || rel.relType;
             edgeTypeCount.set(relName, (edgeTypeCount.get(relName) || 0) + 1);
         });
+        if (onProgress && (idx % edgeProgressStep === 0 || idx === rows.length - 1)) {
+            const ratio = (idx + 1) / Math.max(rows.length, 1);
+            onProgress({ phase: 'edges', percent: Math.min(0.98, 0.62 + ratio * 0.36), rows: rows.length, total: filteredRows.length });
+        }
     });
 
     return {
@@ -288,7 +310,8 @@ export function buildKnowledgeRelationGraphData(normalizedList = [], options = {
             matched: 0,
             truncated: filteredRows.length > rows.length,
             edgeTypes: Array.from(edgeTypeCount.entries()).map(([name, count]) => ({ name, count }))
-        }
+        },
+        dominantRelTypes
     };
 }
 

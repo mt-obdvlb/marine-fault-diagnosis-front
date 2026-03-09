@@ -69,7 +69,7 @@ const items = computed(() => [
   },
   {
     name: '知识图谱',
-    to: {name: 'KgExplorer'},
+    to: {name: 'Kg'},
     show: true
   }
 ])
