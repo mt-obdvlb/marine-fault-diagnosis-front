@@ -227,7 +227,7 @@ export function buildKnowledgeRelationGraphData(normalizedList = [], options = {
             label: `${item.identifier}`,
             subLabel: item.label,
             kind: item.label,
-            type: item.type,
+            dbType: item.type,
             desc: item.desc,
             x: Math.cos(angle) * radius,
             y: Math.sin(angle) * radius,
@@ -251,7 +251,7 @@ export function buildKnowledgeRelationGraphData(normalizedList = [], options = {
                     label: rel.targetIdentifier,
                     subLabel: rel.relName,
                     kind: rel.relName,
-                    type: 'unknown',
+                    dbType: 'unknown',
                     desc: `未在当前筛选结果中找到节点 ${rel.targetIdentifier}`,
                     x: Math.random() * 30 - 15,
                     y: Math.random() * 30 - 15,
@@ -425,10 +425,7 @@ export function clearKnowledgeCache() {
 }
 
 export async function fetchAllKnowledges(query = {}, requestArg = {}, options = {}) {
-    const pageSize = Number(options.pageSize) > 0 ? Number(options.pageSize) : 100;
-    const maxPages = Number(options.maxPages) > 0 ? Number(options.maxPages) : 500;
     const onProgress = typeof options.onProgress === 'function' ? options.onProgress : null;
-    const singleRequest = options.singleRequest !== false;
     const force = Boolean(options.force);
     const queryKeys = Object.keys(query || {}).filter(key => query[key] !== '' && query[key] !== undefined && query[key] !== null);
     const useCache = queryKeys.length === 0;
@@ -437,41 +434,11 @@ export async function fetchAllKnowledges(query = {}, requestArg = {}, options = 
     if (useCache && !force && KNOWLEDGE_CACHE.promise) return KNOWLEDGE_CACHE.promise;
 
     const runner = (async () => {
-        if (singleRequest) {
-            if (onProgress) onProgress({ page: 1, pageSize: 100000, loaded: 0, total: 0 });
-            const r = await api.knowledgeList(
-                { ...query, page: 1, page_size: 100000 },
-                requestArg
-            );
-            if (!r) return null;
-            const payload = r.data || {};
-            const all = Array.isArray(payload.items) ? payload.items : [];
-            if (useCache) {
-                KNOWLEDGE_CACHE.loaded = true;
-                KNOWLEDGE_CACHE.rows = all;
-            }
-            return all;
-        }
-
-        const all = [];
-        let total = 0;
-
-        for (let page = 1; page <= maxPages; page += 1) {
-            if (onProgress) onProgress({ page, pageSize, loaded: all.length, total });
-            const r = await api.knowledgeList(
-                { ...query, page, page_size: pageSize },
-                requestArg
-            );
-            if (!r) return null;
-
-            const payload = r.data || {};
-            const pageItems = Array.isArray(payload.items) ? payload.items : [];
-            if (page === 1) total = Number(payload.total) || pageItems.length;
-            all.push(...pageItems);
-
-            if (pageItems.length <= 0 || all.length >= total || pageItems.length < pageSize) break;
-        }
-
+        if (onProgress) onProgress({ page: 1, pageSize: 0, loaded: 0, total: 0 });
+        const r = await api.knowledgeList(query, requestArg);
+        if (!r) return null;
+        const payload = r.data || {};
+        const all = Array.isArray(payload.items) ? payload.items : [];
         if (useCache) {
             KNOWLEDGE_CACHE.loaded = true;
             KNOWLEDGE_CACHE.rows = all;

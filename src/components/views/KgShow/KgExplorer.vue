@@ -101,8 +101,6 @@ const selectedTypes = ref(new Set(DB_TYPE_OPTIONS));
 const allRows = ref([]);
 let graph = null;
 let renderer = null;
-let draggedNode = null;
-let dragging = false;
 
 function toggleLabel(label) {
   if (selectedLabels.value.has(label)) selectedLabels.value.delete(label);
@@ -150,37 +148,6 @@ function installReducers() {
   }));
 }
 
-function installDragAndKeys() {
-  if (!renderer || !graph) return;
-
-  renderer.on('downNode', ({ node, event }) => {
-    dragging = true;
-    draggedNode = node;
-    const camera = renderer.getCamera();
-    camera.disable();
-    if (event?.original) event.original.preventDefault();
-  });
-
-  renderer.getMouseCaptor().on('mousemovebody', e => {
-    if (!dragging || !draggedNode) return;
-    const pos = renderer.viewportToGraph({ x: e.x, y: e.y });
-    graph.setNodeAttribute(draggedNode, 'x', pos.x);
-    graph.setNodeAttribute(draggedNode, 'y', pos.y);
-    e.preventSigmaDefault();
-    if (e.original) {
-      e.original.preventDefault();
-      e.original.stopPropagation();
-    }
-  });
-
-  renderer.getMouseCaptor().on('mouseup', () => {
-    if (!dragging) return;
-    dragging = false;
-    draggedNode = null;
-    renderer.getCamera().enable();
-  });
-}
-
 function onKeydown(e) {
   if (!renderer) return;
   const camera = renderer.getCamera();
@@ -210,31 +177,38 @@ function initRenderer(newGraph) {
     maxCameraRatio: 30,
     hideLabelsOnMove: true,
     hideEdgesOnMove: true,
-    allowInvalidContainer: false
+    allowInvalidContainer: true
   });
 
   installReducers();
-  installDragAndKeys();
+  requestAnimationFrame(() => {
+    if (renderer) renderer.refresh();
+  });
 }
 
 async function applyFiltersAndRender() {
   if (!allRows.value.length) return;
   statusText.value = '正在构建图谱...';
 
-  const built = buildKnowledgeRelationGraphData(allRows.value, {
-    selectedLabels: Array.from(selectedLabels.value),
-    selectedTypes: Array.from(selectedTypes.value),
-    keyword: searchKeyword.value,
-    maxNodes: maxRenderNodes.value,
-    maxEdges: maxRenderNodes.value * 5,
-    includeGhostNodes: false
-  });
+  try {
+    const built = buildKnowledgeRelationGraphData(allRows.value, {
+      selectedLabels: Array.from(selectedLabels.value),
+      selectedTypes: Array.from(selectedTypes.value),
+      keyword: searchKeyword.value,
+      maxNodes: maxRenderNodes.value,
+      maxEdges: maxRenderNodes.value * 5,
+      includeGhostNodes: false
+    });
 
-  initRenderer(built.graph);
-  metrics.value = built.metrics;
-  statusText.value = built.metrics.truncated
-    ? `渲染完成（性能模式）：${built.metrics.nodes} 节点 / ${built.metrics.edges} 关系`
-    : `渲染完成：${built.metrics.nodes} 节点 / ${built.metrics.edges} 关系`;
+    initRenderer(built.graph);
+    metrics.value = built.metrics;
+    statusText.value = built.metrics.truncated
+      ? `渲染完成（性能模式）：${built.metrics.nodes} 节点 / ${built.metrics.edges} 关系`
+      : `渲染完成：${built.metrics.nodes} 节点 / ${built.metrics.edges} 关系`;
+  } catch (e) {
+    console.error(e);
+    statusText.value = `图谱渲染失败：${e?.message || '未知错误'}`;
+  }
 }
 
 async function loadData() {
@@ -245,10 +219,9 @@ async function loadData() {
       onError(text, e) {
         console.error(text, e);
       }
-    },
-    {
-      onProgress({ page }) {
-        statusText.value = `正在加载知识（第 ${page} 页）...`;
+    }, {
+      onProgress() {
+        statusText.value = '正在加载知识...';
       }
     }
   );
@@ -276,11 +249,18 @@ async function loadData() {
 
 onMounted(async () => {
   window.addEventListener('keydown', onKeydown);
-  await loadData();
+  window.addEventListener('resize', refreshRender);
+  try {
+    await loadData();
+  } catch (e) {
+    console.error(e);
+    statusText.value = `数据加载失败：${e?.message || '未知错误'}`;
+  }
 });
 
 onBeforeUnmount(() => {
   window.removeEventListener('keydown', onKeydown);
+  window.removeEventListener('resize', refreshRender);
   if (renderer) renderer.kill();
   renderer = null;
   graph = null;
