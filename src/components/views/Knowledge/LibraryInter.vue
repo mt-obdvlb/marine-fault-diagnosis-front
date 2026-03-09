@@ -76,7 +76,12 @@
 
 <script setup>
 import { reactive, ref } from 'vue';
-import api from '@/utils/api';
+import {
+    buildKnowledgeOverview,
+    fetchAllKnowledges,
+    filterKnowledgesByEquipment,
+    normalizeKnowledgeList
+} from '@/utils/knowledge';
 
 const loading = ref(false);
 const total = ref(0);
@@ -93,18 +98,18 @@ const query = reactive({
 async function reloadData() {
     loading.value = true;
     try {
-        const [listRes, overviewRes] = await Promise.all([
-            api.knowledgeList(query, { errorText: '知识列表获取失败' }),
-            api.kgOverview({ errorText: '图谱概览获取失败', onError(text, e) { console.error(text, e); } })
-        ]);
+        const rows = await fetchAllKnowledges(
+            { keyword: query.keyword },
+            { errorText: '知识列表获取失败' }
+        );
+        if (!rows) return;
 
-        if (listRes) {
-            total.value = listRes.data?.total || 0;
-            items.value = listRes.data?.items || [];
-        }
-        if (overviewRes) {
-            overview.value = overviewRes.data || {};
-        }
+        const normalized = normalizeKnowledgeList(rows);
+        const filtered = filterKnowledgesByEquipment(normalized, query.equipment);
+
+        total.value = filtered.length;
+        items.value = filtered.slice(0, query.page_size);
+        overview.value = buildKnowledgeOverview(filtered);
     } finally {
         loading.value = false;
     }

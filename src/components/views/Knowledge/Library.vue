@@ -72,6 +72,7 @@ import { reactive, ref } from 'vue';
 import eventBus from '@/utils/eventBus';
 import { settings } from '@/utils/Settings';
 import api from '@/utils/api';
+import { filterKnowledgesByEquipment, normalizeKnowledgeList } from '@/utils/knowledge';
 
 const loading = ref(false);
 const items = ref([]);
@@ -102,8 +103,10 @@ async function reloadItems() {
     try {
         const r = await api.knowledgeList(query, { errorText: '知识库列表获取失败，请刷新重试' });
         if (!r) return;
-        total.value = r.data?.total || 0;
-        items.value = r.data?.items || [];
+        const normalized = normalizeKnowledgeList(r.data?.items || []);
+        const filtered = filterKnowledgesByEquipment(normalized, query.equipment);
+        total.value = filtered.length;
+        items.value = filtered;
     } finally {
         loading.value = false;
     }

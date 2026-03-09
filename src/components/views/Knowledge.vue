@@ -38,11 +38,13 @@ const panelMenuOn = shallowRef(false)
 .area{
     height: 100%;
     display: flex;
+    min-height: 0;
+    overflow: hidden;
 }
 .floatBtn{
     position: fixed;
     right: 0;
-    top: 0;
+    top: var(--app-header-height);
     width: 50px;
     height: 50px;
 }
@@ -62,7 +64,7 @@ const panelMenuOn = shallowRef(false)
 .area.ver .panels{
     position: fixed;
     right: 10px;
-    top: 50px;
+    top: calc(var(--app-header-height) + 10px);
 }
 .panels .panel{
     padding: 13px;
@@ -84,6 +86,7 @@ const panelMenuOn = shallowRef(false)
 .content{
     flex: 1;
     width: 0;
+    min-height: 0;
     margin: 5px;
     padding: 5px;
     border: 2px solid var(--subBgColor);

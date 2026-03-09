@@ -4,53 +4,70 @@ html, body, #app {
   margin: 0;
   padding: 0;
 }
-#app{
-  display: flex;
-  overflow: hidden;
-  flex-direction: column;
+
+:root {
+  --app-header-height: 60px;
 }
-img{
+
+#app {
+  display: flex;
+  flex-direction: column;
+  box-sizing: border-box;
+  height: 100vh;
+  height: 100dvh;
+  overflow: hidden;
+}
+
+img {
   max-width: 100%;
   max-height: 100%;
   object-fit: contain;
   user-select: none;
 }
+
 /* 按钮反馈 */
-.buttonEffect{
+.buttonEffect {
   user-select: none;
   cursor: pointer;
   transition: filter .2s;
 }
-:root[theme='light'] .buttonEffect:hover{
+
+:root[theme='light'] .buttonEffect:hover {
   filter: brightness(0.9);
 }
-:root[theme='light'] .buttonEffect:active{
+
+:root[theme='light'] .buttonEffect:active {
   filter: brightness(0.7);
 }
 
-:root[theme='dark'] .autoInvert{
+:root[theme='dark'] .autoInvert {
   filter: invert(1);
 }
-  /* :root[theme='dark'] img.buttonEffect{
-  filter: invert(100%);
+
+/* :root[theme='dark'] img.buttonEffect{
+filter: invert(100%);
 } */
-:root[theme='dark'] .buttonEffect:hover{
+:root[theme='dark'] .buttonEffect:hover {
   filter: brightness(1.3);
 }
-:root[theme='dark'] .buttonEffect:active{
+
+:root[theme='dark'] .buttonEffect:active {
   filter: brightness(1.7);
 }
-:root[theme='dark'] img.buttonEffect, :root[theme='dark'] .buttonEffect img, :root[theme='dark'] .buttonEffect svg{
+
+:root[theme='dark'] img.buttonEffect, :root[theme='dark'] .buttonEffect img, :root[theme='dark'] .buttonEffect svg {
   filter: invert(100%);
 }
-:root[theme='dark'] img.buttonEffect:hover, :root[theme='dark'] .buttonEffect:hover img{
+
+:root[theme='dark'] img.buttonEffect:hover, :root[theme='dark'] .buttonEffect:hover img {
   filter: invert(100%) brightness(1.3);
 }
-:root[theme='dark'] img.buttonEffect:active, :root[theme='dark'] .buttonEffect:active img{
+
+:root[theme='dark'] img.buttonEffect:active, :root[theme='dark'] .buttonEffect:active img {
   filter: invert(100%) brightness(1.7);
 }
 
-:root[theme='light']{
+:root[theme='light'] {
   --bgColor: white;
   --toBgColor: #e3f0ff;
   --subBgColor: rgb(195, 195, 195);
@@ -58,33 +75,34 @@ img{
   --subBgColor3: rgb(230, 230, 230);
   --subBgColor4: rgb(247, 247, 247);
   --holder-color: gray;
-  --text-color:rgb(0, 0, 0);
-  --header-item:blue;
-  --header-item-active:rgb(255, 123, 0);
+  --text-color: rgb(0, 0, 0);
+  --header-item: blue;
+  --header-item-active: rgb(255, 123, 0);
   --setting-item-bg: rgb(235, 235, 235);
-
+  
   --devdoc-item-hover: #e6f7ff;
-
+  
   --login-gradient: linear-gradient(135deg, #f8fbff 60%, #e3f0ff 100%);
   --login-btn: #00d9ff;
   --login-btn-hover: #00bfff;
-
+  
   --header-shadow: 0 2px 12px #b3e0ff33;
   --header-border: #e3f0ff;
   --header-menu-hover: #e6f7ff;
   --header-menu-active: #00d9ff;
-
+  
   --card-bg: #fff;
   --card-shadow: 0 4px 32px #b3e1ffa7;
   --card-border: #e3f0ff;
   --danger-btn: linear-gradient(90deg, #ff4e50, #f9d423);
   --danger-btn-hover: linear-gradient(90deg, #f85032, #e73827);
-
+  
   --aside-menu-item-hover-from: rgb(216, 216, 216);
   --aside-menu-item-hover-to: rgb(255, 255, 255);
   --aside-menu-item-active: #00d9ff;
 }
-:root[theme='dark']{
+
+:root[theme='dark'] {
   --bgColor: #292a2d;
   --toBgColor: #494949;
   --subBgColor: rgb(125, 125, 125);
@@ -92,28 +110,28 @@ img{
   --subBgColor3: rgb(69, 69, 69);
   --subBgColor4: rgb(60, 60, 60);
   --holder-color: silver;
-  --text-color:white;
-  --header-item:rgb(0, 217, 255);
-  --header-item-active:orange;
+  --text-color: white;
+  --header-item: rgb(0, 217, 255);
+  --header-item-active: orange;
   --setting-item-bg: #414348;
-
+  
   --devdoc-item-hover: #3b3b3b;
-
+  
   --login-gradient: linear-gradient(135deg, #23242a 80%, #1a1b20 100%);
   --login-btn: #00d9ff;
   --login-btn-hover: #007fff;
-
+  
   --header-shadow: 0 2px 12px #54545445;
   --header-border: #414348;
   --header-menu-hover: #353636;
   --header-menu-active: #24373a;
-
+  
   --card-bg: #23242a;
   --card-shadow: 0 4px 32px #00d9ff33;
   --card-border: #414348;
   --danger-btn: linear-gradient(90deg, #ff4e50, #f9d423);
   --danger-btn-hover: linear-gradient(90deg, #f85032, #e73827);
-
+  
   --aside-menu-item-hover-from: rgb(125, 125, 125);
   --aside-menu-item-hover-to: rgb(156, 156, 156);
   --aside-menu-item-active: #536591;
