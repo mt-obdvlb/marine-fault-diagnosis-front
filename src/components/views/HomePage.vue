@@ -18,7 +18,7 @@
                 <div class="title">智能问答</div>
                 <div class="dscr">输入故障现象、工况参数和检修记录，系统基于船舶故障知识返回诊断建议与处理步骤。</div>
             </RouterLink>
-            <RouterLink class="moduleCard graphCard" :to="{ name: 'KgNavigator' }">
+            <RouterLink class="moduleCard graphCard" :to="{ name: 'KgExplorer' }">
                 <div class="eyebrow">Knowledge Graph</div>
                 <div class="title">知识图谱</div>
                 <div class="dscr">查看故障现象、故障原因、维修步骤、零部件与装备类型之间的关联关系。</div>

@@ -12,8 +12,8 @@
 
 <script setup>
 import Usage from './Knowledge/Usage.vue';
-import Library from './Knowledge/Library.vue';
-import LibraryInter from './Knowledge/LibraryInter.vue';
+import LibraryForm from './Knowledge/LibraryForm.vue';
+import LibraryManage from './Knowledge/LibraryManage.vue';
 import { shallowRef } from 'vue';
 import { screen } from '@/utils/GLO';
 const panels=[
@@ -22,15 +22,15 @@ const panels=[
         component:Usage,
     },
     {
-        name:"知识维护",
-        component:Library,
+        name:"条目录入",
+        component:LibraryForm,
     },
     {
-        name:"知识总览",
-        component:LibraryInter,
+        name:"维护与概览",
+        component:LibraryManage,
     },
 ]
-const currentPanel = shallowRef(panels[2])
+const currentPanel = shallowRef(panels[1])
 const panelMenuOn = shallowRef(false)
 </script>
 

@@ -16,13 +16,6 @@ const settings =reactive({
     charPerSecond:40,
     /** 界面主题，取值为 `light` 或 `dark` */
     theme:'light',
-    //DEBUG
-    /** 调试模式开关 */
-    debugMode:false,
-    /** 调试模式下使用的api路径 */
-    api_path: 'http://localhost:8000',
-    /** 调试模式下发送问题的其他参数, */
-    api_arg: '{\n  "model": "qwen2.5-7b-instruct",\n  "max_tokens": 1024,\n  "temperature": 0.5\n}',
 })
 
 /** 设置的文字描述 */
@@ -61,33 +54,6 @@ const description=[
                 type:"range",
                 max:150,
                 min:20
-            }
-        ]
-    },
-    {
-        name:"调试",
-        items:[
-            {
-                text:"调试模式",
-                dscr:"打开后，使用调试设置进行操作",
-                key:"debugMode",
-                type:"bool",
-            },
-            {
-                text:"API接口",
-                dscr:"所有请求接口的服务地址\n例如填入 http://localhost:8000 后，问答接口将请求 http://localhost:8000/v1/chat/completions",
-                show:()=>settings.debugMode,
-                key:"api_path",
-                type:"text",
-            },
-            {
-                text:"请求体其他参数内容",
-                dscr:"大模型提问的其他自定义参数JSON\n(若不指明则使用默认参数)",
-                show:()=>settings.debugMode,
-                key:"api_arg",
-                type:"text",
-                multiline:true,
-                reset:'{\n  "model": "qwen2.5-7b-instruct",\n  "max_tokens": 1024,\n  "temperature": 0.5\n}',
             }
         ]
     }

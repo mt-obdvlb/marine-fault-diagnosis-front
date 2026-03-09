@@ -7,9 +7,7 @@ const
     Knowledge = ()=>import('@/components/views/Knowledge.vue'),
     Settings = ()=>import('@/components/views/Settings2.vue'),
     // 知识图谱展示功能目前无需登录状态即可访问
-    KgNavigator = ()=>import('@/components/views/KgShow/KgNavigator.vue'),
-    KgExplorer = ()=>import('@/components/views/KgShow/KgExplorer.vue'),
-    KgFinder = ()=>import('@/components/views/KgShow/KgFinder.vue')
+    KgExplorer = ()=>import('@/components/views/KgShow/KgExplorer.vue')
 
 /** 路由配置 */
 const routes=[
@@ -38,22 +36,18 @@ const routes=[
         meta:{ title:'系统设置 - 船舶装备故障诊断系统' }
     },
     {
-        path:'/kgnavigator',
-        name:'KgNavigator',
-        component:KgNavigator,
-        meta:{ title:'图谱导航 - 船舶装备故障诊断系统' }
-    },
-    {
         path:'/kgexplorer',
         name:'KgExplorer',
         component:KgExplorer,
-        meta:{ title:'图谱探索 - 船舶装备故障诊断系统' }
+        meta:{ title:'知识图谱 - 船舶装备故障诊断系统' }
+    },
+    {
+        path:'/kgnavigator',
+        redirect:'/kgexplorer'
     },
     {
         path:'/kgfinder',
-        name:'KgFinder',
-        component:KgFinder,
-        meta:{ title:'关系查找 - 船舶装备故障诊断系统' }
+        redirect:'/kgexplorer'
     },
     {
         path:'/:all(.*)',

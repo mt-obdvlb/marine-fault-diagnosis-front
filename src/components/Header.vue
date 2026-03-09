@@ -35,21 +35,7 @@
           </div>
         </RouterLink>
       </template>
-      
-      <div class='kgMenu'>
-        <div
-          :class="['kgButton',{'active':kgItems.some(ki=>ki.to.name==route.name)}]">
-          知识图谱
-        </div>
-        <div class='kgMenuItems'>
-          <RouterLink v-for='kgItem in kgItems'
-                      :key='kgItem.name'
-                      :to='kgItem.to'
-                      class='kgMenuItem buttonEffect'>
-            <div class='text'>{{ kgItem.name }}</div>
-          </RouterLink>
-        </div>
-      </div>
+    
     </div>
     <div v-show="screen.type==='hor'" class='utilityMenu'>
       <template v-for='item in utilityItems'
@@ -80,29 +66,16 @@ const items = computed(() => [
     name: '智能问答',
     to: {name: 'AskAnswer'},
     show: true
+  },
+  {
+    name: '知识图谱',
+    to: {name: 'KgExplorer'},
+    show: true
   }
 ])
 
-const kgItems = [
-  {
-    name: '图谱导航',
-    to: {name: 'KgNavigator'}
-  }, {
-    name: '图谱探索',
-    to: {name: 'KgExplorer'}
-  }, {
-    name: '图谱查找',
-    to: {name: 'KgFinder'}
-  }
-]
-
 const utilityItems = computed(() => [
   {
-    name: '诊断会话',
-    to: {name: 'AskAnswer'},
-    icon: '/icon/chat.svg',
-    show: true
-  }, {
     name: '知识库管理',
     to: {name: 'Knowledge'},
     icon: '/icon/knowledge.svg',

@@ -48,7 +48,7 @@ const up_items=ref([
         name:"知识图谱",
         icon:"./icon/knowledge.svg",
         function:()=>{
-            router.push({ name:"KgNavigator" })
+            router.push({ name:"KgExplorer" })
         },
         available:true
     },

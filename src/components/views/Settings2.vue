@@ -6,15 +6,63 @@
         </div>
         <div class="main">
             <h2>{{ current.name }}</h2>
+            <div v-if="current.name==='其他'" class="item llm">
+                <div class="text">
+                    当前 LLM 模型
+                    <span class="help" title="悬停可查看该设置说明">
+                        <img alt="?" src="/icon/help.svg"/>
+                        <span class="tooltip">先读取当前 LLM 提供方与模型，再修改目标提供方对应的模型并保存。</span>
+                    </span>
+                </div>
+                <div class="llmBody">
+                    <div class="llmCurrent">当前提供方：{{ llm.currentProvider || '未获取' }}</div>
+                    <div class="llmCurrent">当前模型：{{ llm.currentModel || '未获取' }}</div>
+                    <div class="llmEdit">
+                        <select class="input text providerSelect" v-model="llm.provider">
+                            <option v-for="p in llm.providers" :key="p" :value="p">{{ p }}</option>
+                        </select>
+                        <input class="input text" type="text" v-model.trim="llm.model" placeholder="例如：qwen2.5:0.5b" />
+                        <button class="saveBtn buttonEffect" :disabled="!llm.provider || !llm.model || llm.saving" @click="saveLlm">
+                            {{ llm.saving ? '保存中...' : '保存模型' }}
+                        </button>
+                        <button class="buttonEffect" :disabled="llm.loading" @click="loadLlm">
+                            刷新
+                        </button>
+                    </div>
+                </div>
+            </div>
             <div v-for="i in current.items" v-show="!i.show||i.show()" :class="['item',i.type]">
-                <div class="text">{{ i.text||i.textF(ArgPool[i.key]) }} <img v-show="i.dscr" alt="?" src="/icon/help.svg" :title="i.dscr" style="height:15px;margin-left:4px;"/></div>
-                
-                <label class="input switch" v-if="i.type==='bool'" @click="settings[i.key]=!settings[i.key]">
-                    <input type="checkbox" :checked="settings[i.key]" disabled/>
-                    <span class="slider"></span>
-                </label>
-                <input class="input range" v-else-if="i.type==='range'" type="range" :min="i.min" :max="i.max" :step="i.step||1" v-model.number="ArgPool[i.key]" @mouseup="settings[i.key]=ArgPool[i.key]"/>
+                <template v-if="i.type==='bool'">
+                    <label class="input switch" @click="settings[i.key]=!settings[i.key]">
+                        <input type="checkbox" :checked="settings[i.key]" disabled/>
+                        <span class="slider"></span>
+                    </label>
+                    <div class="text">
+                        {{ i.text||i.textF(ArgPool[i.key]) }}
+                        <span v-show="i.dscr" class="help" title="悬停可查看该设置说明">
+                            <img alt="?" src="/icon/help.svg"/>
+                            <span class="tooltip">{{ i.dscr }}</span>
+                        </span>
+                    </div>
+                </template>
+                <template v-else-if="i.type==='range'">
+                    <div class="text">
+                        {{ i.text||i.textF(ArgPool[i.key]) }}
+                        <span v-show="i.dscr" class="help" title="悬停可查看该设置说明">
+                            <img alt="?" src="/icon/help.svg"/>
+                            <span class="tooltip">{{ i.dscr }}</span>
+                        </span>
+                    </div>
+                    <input class="input range" type="range" :min="i.min" :max="i.max" :step="i.step||1" v-model.number="ArgPool[i.key]" @mouseup="settings[i.key]=ArgPool[i.key]"/>
+                </template>
                 <div v-else-if="i.type==='text'">
+                    <div class="text">
+                        {{ i.text||i.textF(ArgPool[i.key]) }}
+                        <span v-show="i.dscr" class="help" title="悬停可查看该设置说明">
+                            <img alt="?" src="/icon/help.svg"/>
+                            <span class="tooltip">{{ i.dscr }}</span>
+                        </span>
+                    </div>
                     <textarea v-if="i.multiline" class="input text" v-model="ArgPool[i.key]" @change="settings[i.key]=ArgPool[i.key]"></textarea>
                     <input v-else class="input text" type="text" v-model="ArgPool[i.key]" @change="settings[i.key]=ArgPool[i.key]"/>
                 </div>
@@ -24,10 +72,22 @@
 </template>
 
 <script setup>
-import { reactive,ref } from 'vue'
+import { reactive,ref,onMounted,watch } from 'vue'
 import { settings,description } from '@/utils/Settings'
 import { screen } from '@/utils/GLO'
+import eventBus from '@/utils/eventBus'
+import api from '@/utils/api'
 let ArgPool=reactive({})
+const llm = reactive({
+    loading:false,
+    saving:false,
+    providers:[],
+    provider:'',
+    model:'',
+    currentProvider:'',
+    currentModel:'',
+    config:null
+})
 
 let current=ref(description[0])
 description.forEach(cls => {
@@ -36,6 +96,56 @@ description.forEach(cls => {
             ArgPool[item.key]=settings[item.key]
     });
 });
+
+function applyLlmResp(r){
+    const data = r?.data || r || {}
+    llm.config = data
+    const providers = Object.keys(data).filter((k)=>k!=='llm_provider' && typeof data[k]==='object' && data[k]!==null)
+    llm.providers = providers
+    const currentProvider = data.llm_provider || providers[0] || ''
+    const currentModel = data?.[currentProvider]?.model || ''
+    llm.currentProvider = currentProvider
+    llm.currentModel = currentModel
+    if(!llm.provider) llm.provider = currentProvider
+    if(!llm.model) llm.model = currentModel
+}
+
+async function loadLlm(){
+    llm.loading = true
+    try{
+        const r = await api.systemConfig({errorText:'读取LLM配置失败'})
+        applyLlmResp(r)
+    }finally{
+        llm.loading = false
+    }
+}
+
+async function saveLlm(){
+    if(!llm.provider || !llm.model) return
+    llm.saving = true
+    try{
+        const body = JSON.parse(JSON.stringify(llm.config || {}))
+        body.llm_provider = llm.provider
+        if(!body[llm.provider] || typeof body[llm.provider] !== 'object') body[llm.provider] = {}
+        body[llm.provider].model = llm.model
+        const r = await api.systemUpdateConfig(body, {errorText:'保存LLM配置失败'})
+        if(r) applyLlmResp(r)
+        else {
+            llm.currentProvider = llm.provider
+            llm.currentModel = llm.model
+        }
+        eventBus.emit('dialog',{text:'LLM 模型已更新'})
+    }finally{
+        llm.saving = false
+    }
+}
+
+onMounted(loadLlm)
+
+watch(()=>llm.provider, (provider)=>{
+    if(!provider) return
+    llm.model = llm.config?.[provider]?.model || ''
+})
 </script>
 
 <style scoped>
@@ -131,11 +241,90 @@ description.forEach(cls => {
     padding-bottom: 10px;
     margin-top: 5px;
 }
+.item.bool{
+    gap: 10px;
+}
 .item .text{
     flex: 1;
     display: flex;
     align-items: center;
     text-wrap: nowrap;
+}
+.help{
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    margin-left: 4px;
+}
+.help img{
+    height: 15px;
+}
+.help .tooltip{
+    position: absolute;
+    left: 100%;
+    top: 50%;
+    transform: translate(8px,-50%);
+    min-width: 220px;
+    max-width: 360px;
+    padding: 6px 8px;
+    border-radius: 6px;
+    border: 1px solid var(--subBgColor);
+    background-color: var(--bgColor);
+    box-shadow: 0 6px 14px rgba(0,0,0,0.12);
+    font-size: 12px;
+    line-height: 1.4;
+    white-space: pre-wrap;
+    z-index: 10;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity .15s ease;
+}
+.help:hover .tooltip{
+    opacity: 1;
+}
+.item.llm{
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 8px;
+}
+.llmBody{
+    width: 100%;
+}
+.llmCurrent{
+    font-size: 14px;
+    margin-bottom: 6px;
+}
+.llmEdit{
+    display: flex;
+    gap: 8px;
+    align-items: center;
+}
+.llmEdit .input.text{
+    width: 380px;
+}
+.llmEdit .providerSelect{
+    width: 140px;
+}
+.saveBtn{
+    white-space: nowrap;
+}
+.llmEdit button{
+    border: 1px solid var(--subBgColor);
+    background-color: var(--bgColor);
+    color: var(--text-color);
+    border-radius: 6px;
+    padding: 6px 10px;
+}
+.llmEdit button:disabled{
+    opacity: .6;
+    cursor: not-allowed;
+}
+.area.area.ver .llmEdit{
+    flex-direction: column;
+    align-items: stretch;
+}
+.area.area.ver .llmEdit .input.text{
+    width: 100%;
 }
 .item .input.range{
     width: 200px;

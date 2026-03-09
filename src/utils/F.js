@@ -1,9 +1,6 @@
 // 全局方法
 import GLO from './GLO';
 import eventBus from './eventBus';
-import Settings from './Settings';
-
-const settings = Settings.settings
 
 /* 全局方法 */
 const F = {
@@ -97,7 +94,7 @@ const F = {
         }
     },
     /**
-     * 自动选择 API 地址进行请求访问（判断调试模式）
+     * 使用默认 API 地址进行请求访问
      * @param {string} path - 相对于API路径的请求路径
      * 
      * @param {Object} [arg] - 请求参数
@@ -114,7 +111,6 @@ const F = {
      * @param {Object} [opt.headers] - 自定义请求头，覆盖自动添加的请求头 
      */
     async myFetchApi(path,arg={},opt={}){
-        if(settings.debugMode) return await F.myFetch(settings.api_path+path,arg,opt)
         return await F.myFetch(GLO.API_SERVER_URL+path,arg,opt)
     }
 }

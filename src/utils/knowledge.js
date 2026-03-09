@@ -1,11 +1,23 @@
 import Graph from 'graphology';
 import api from './api';
 
+export const RELATION_TARGET_LABEL = {
+    relationship_fault: '故障现象',
+    relationship_reason: '故障原因',
+    relationship_solution: '维修步骤',
+    relationship_component: '零部件',
+    relationship_precaution: '注意事项',
+    relationship_material: '使用材料'
+};
+
 const DEFAULT_COLORS = {
     type: '#722ED1',
     entry: '#1677FF',
     desc: '#13A8A8'
 };
+
+export const LABEL_OPTIONS = ['使用材料', '故障原因', '故障现象', '注意事项', '维修步骤', '设备', '零部件'];
+export const DB_TYPE_OPTIONS = ['static', 'dynamic'];
 
 function cleanText(value) {
     return String(value ?? '').trim();
@@ -30,74 +42,253 @@ export function normalizeKnowledgeList(list = []) {
         if (seenEntryIds.has(entryId)) entryId = `${entryId}_${index}`;
         seenEntryIds.add(entryId);
 
-        const label = cleanText(item?.label ?? item?.name ?? rawIdentifier) || rawIdentifier;
-        const equipment = cleanText(item?.equipment ?? item?.type);
-        const category = cleanText(item?.category);
-        const type = cleanText(item?.type ?? item?.equipment ?? item?.category ?? 'unknown') || 'unknown';
+        const labelText = cleanText(item?.label ?? item?.category ?? '未分类') || '未分类';
+        const dbType = cleanText(item?.type ?? item?.db_type ?? 'static') || 'static';
         const descList = toDescList(item);
         const desc = cleanText(item?.desc) || descList.join('；');
         const sourceFile = cleanText(item?.source_file ?? item?.sourceFile);
         const createdAt = cleanText(item?.created_at ?? item?.createdAt);
+        const relationships = typeof item?.relationships === 'object' && item.relationships !== null
+            ? item.relationships
+            : {};
+
+        const relationTargets = Object.entries(relationships)
+            .map(([relType, targetIdentifier]) => ({
+                relType,
+                relName: RELATION_TARGET_LABEL[relType] || relType,
+                targetIdentifier: cleanText(targetIdentifier)
+            }))
+            .filter(v => v.targetIdentifier);
+
+        const displayName = cleanText(item?.name ?? item?.title) || `${labelText} ${rawIdentifier}`;
 
         return {
             entryId,
             id: item?.id ?? rawIdentifier,
             identifier: rawIdentifier,
-            label,
-            name: label,
-            type,
-            equipment,
-            category,
+            label: labelText,
+            name: displayName,
+            type: dbType,
+            equipment: cleanText(item?.equipment ?? ''),
+            category: cleanText(item?.category ?? labelText),
             desc,
             descList,
+            relationships,
+            relationTargets,
             source_file: sourceFile,
             created_at: createdAt,
-            searchText: `${label} ${rawIdentifier} ${type} ${equipment} ${category} ${descList.join(' ')}`.toLowerCase(),
+            searchText: `${displayName} ${rawIdentifier} ${labelText} ${dbType} ${desc} ${relationTargets.map(v => `${v.relType} ${v.targetIdentifier}`).join(' ')}`.toLowerCase(),
             raw: item
         };
     });
 }
 
-export function filterKnowledgesByEquipment(list = [], keyword = '') {
-    const search = cleanText(keyword).toLowerCase();
-    if (!search) return Array.isArray(list) ? list : [];
+export function filterKnowledges(list = [], filters = {}) {
+    const keyword = cleanText(filters?.keyword).toLowerCase();
+    const equipment = cleanText(filters?.equipment).toLowerCase();
+    const labels = Array.isArray(filters?.labels) ? new Set(filters.labels) : null;
+    const types = Array.isArray(filters?.types) ? new Set(filters.types) : null;
+
     return (Array.isArray(list) ? list : []).filter(item => {
-        const equipment = cleanText(item?.equipment ?? item?.type).toLowerCase();
-        return equipment.includes(search);
+        if (keyword) {
+            const text = cleanText(item?.searchText).toLowerCase();
+            if (!text.includes(keyword)) return false;
+        }
+        if (equipment) {
+            const equipText = cleanText(item?.equipment).toLowerCase();
+            if (!equipText.includes(equipment)) return false;
+        }
+        if (labels && labels.size > 0 && !labels.has(item?.label)) return false;
+        if (types && types.size > 0 && !types.has(item?.type)) return false;
+        return true;
     });
 }
 
+export function filterKnowledgesByEquipment(list = [], keyword = '') {
+    return filterKnowledges(list, { equipment: keyword });
+}
+
+export function paginateList(list = [], page = 1, pageSize = 20) {
+    const safePage = Math.max(1, Number(page) || 1);
+    const safePageSize = Math.max(1, Number(pageSize) || 20);
+    const total = Array.isArray(list) ? list.length : 0;
+    const totalPages = Math.max(1, Math.ceil(total / safePageSize));
+    const currentPage = Math.min(safePage, totalPages);
+    const start = (currentPage - 1) * safePageSize;
+    return {
+        page: currentPage,
+        pageSize: safePageSize,
+        total,
+        totalPages,
+        items: (Array.isArray(list) ? list : []).slice(start, start + safePageSize)
+    };
+}
+
 export function buildKnowledgeOverview(normalizedList = [], topTypes = 8) {
-    const typeToEntries = new Map();
-    const descToEntries = new Map();
-    let descRelationCount = 0;
+    const labelCount = new Map();
+    const typeCount = new Map();
+    const relationCount = new Map();
+    let edgeTotal = 0;
 
     normalizedList.forEach(item => {
-        const typeName = cleanText(item?.type) || 'unknown';
-        if (!typeToEntries.has(typeName)) typeToEntries.set(typeName, []);
-        typeToEntries.get(typeName).push(item);
+        const label = cleanText(item?.label) || '未分类';
+        const type = cleanText(item?.type) || 'dynamic';
+        labelCount.set(label, (labelCount.get(label) || 0) + 1);
+        typeCount.set(type, (typeCount.get(type) || 0) + 1);
 
-        const uniqueDesc = new Set((Array.isArray(item?.descList) ? item.descList : []).filter(Boolean));
-        uniqueDesc.forEach(desc => {
-            if (!descToEntries.has(desc)) descToEntries.set(desc, []);
-            descToEntries.get(desc).push(item);
-            descRelationCount += 1;
+        (Array.isArray(item?.relationTargets) ? item.relationTargets : []).forEach(rel => {
+            const relName = cleanText(rel?.relName || rel?.relType);
+            if (!relName) return;
+            relationCount.set(relName, (relationCount.get(relName) || 0) + 1);
+            edgeTotal += 1;
         });
     });
 
-    const nodeTypes = Array.from(typeToEntries.entries())
-        .sort((a, b) => b[1].length - a[1].length)
+    const nodeTypes = Array.from(labelCount.entries())
+        .sort((a, b) => b[1] - a[1])
         .slice(0, Math.max(1, Number(topTypes) || 8))
-        .map(([type, entries]) => ({ type, label: type, count: entries.length }));
+        .map(([type, count]) => ({ type, label: type, count }));
+
+    const relationTypes = Array.from(relationCount.entries())
+        .sort((a, b) => b[1] - a[1])
+        .map(([type, count]) => ({ type, label: type, count }));
 
     return {
-        node_count: normalizedList.length + typeToEntries.size + descToEntries.size,
-        relation_count: normalizedList.length + descRelationCount,
+        node_count: normalizedList.length,
+        relation_count: edgeTotal,
         node_types: nodeTypes,
-        relation_types: [
-            { type: 'contains', label: '包含', count: normalizedList.length },
-            { type: 'describes', label: '描述', count: descRelationCount }
-        ]
+        relation_types: relationTypes,
+        db_types: Array.from(typeCount.entries()).map(([type, count]) => ({ type, label: type, count }))
+    };
+}
+
+export function collectKnowledgeFacets(normalizedList = []) {
+    const labels = new Set();
+    const types = new Set();
+
+    normalizedList.forEach(item => {
+        if (item?.label) labels.add(item.label);
+        if (item?.type) types.add(item.type);
+    });
+
+    return {
+        labels: Array.from(labels),
+        types: Array.from(types)
+    };
+}
+
+export function buildKnowledgeRelationGraphData(normalizedList = [], options = {}) {
+    const g = new Graph({ multi: true, type: 'directed' });
+    const selectedLabels = new Set(options?.selectedLabels || []);
+    const selectedTypes = new Set(options?.selectedTypes || []);
+    const keyword = cleanText(options?.keyword).toLowerCase();
+    const maxNodes = Math.max(200, Number(options?.maxNodes) || 3000);
+    const maxEdges = Math.max(500, Number(options?.maxEdges) || 20000);
+    const includeGhostNodes = Boolean(options?.includeGhostNodes);
+
+    const filteredRows = normalizedList.filter(item => {
+        if (selectedLabels.size > 0 && !selectedLabels.has(item.label)) return false;
+        if (selectedTypes.size > 0 && !selectedTypes.has(item.type)) return false;
+        if (keyword && !cleanText(item.searchText).toLowerCase().includes(keyword)) return false;
+        return true;
+    });
+    const rows = filteredRows.slice(0, maxNodes);
+
+    const identifierMap = new Map(rows.map(item => [item.identifier, item]));
+    const labelPalette = {
+        使用材料: '#4f7cff',
+        故障原因: '#ff8a00',
+        故障现象: '#ff4d6d',
+        注意事项: '#00a884',
+        维修步骤: '#6b5bff',
+        设备: '#0a9396',
+        零部件: '#bc5090',
+        未分类: '#7a7a7a'
+    };
+
+    const relationColors = {
+        relationship_fault: '#ff4d6d',
+        relationship_reason: '#ff8a00',
+        relationship_solution: '#6b5bff',
+        relationship_component: '#bc5090',
+        relationship_precaution: '#00a884',
+        relationship_material: '#4f7cff'
+    };
+
+    const edgeTypeCount = new Map();
+    let edgeCount = 0;
+
+    rows.forEach((item, idx) => {
+        if (g.hasNode(item.entryId)) return;
+        const angle = (Math.PI * 2 * idx) / Math.max(rows.length, 1);
+        const radius = 10 + (idx % 30) * 1.6;
+        g.addNode(item.entryId, {
+            id: item.identifier,
+            label: `${item.identifier}`,
+            subLabel: item.label,
+            kind: item.label,
+            type: item.type,
+            desc: item.desc,
+            x: Math.cos(angle) * radius,
+            y: Math.sin(angle) * radius,
+            size: 5,
+            color: labelPalette[item.label] || labelPalette.未分类,
+            searchText: item.searchText
+        });
+    });
+
+    rows.forEach(item => {
+        item.relationTargets.forEach((rel, relIndex) => {
+            if (edgeCount >= maxEdges) return;
+            const target = identifierMap.get(rel.targetIdentifier);
+            const targetNodeId = target ? target.entryId : `ghost_${rel.targetIdentifier}`;
+
+            if (!target && !includeGhostNodes) return;
+
+            if (!g.hasNode(targetNodeId)) {
+                g.addNode(targetNodeId, {
+                    id: rel.targetIdentifier,
+                    label: rel.targetIdentifier,
+                    subLabel: rel.relName,
+                    kind: rel.relName,
+                    type: 'unknown',
+                    desc: `未在当前筛选结果中找到节点 ${rel.targetIdentifier}`,
+                    x: Math.random() * 30 - 15,
+                    y: Math.random() * 30 - 15,
+                    size: 3,
+                    color: '#c0c0c0',
+                    searchText: `${rel.targetIdentifier} ${rel.relName}`.toLowerCase()
+                });
+            }
+
+            const edgeKey = `${item.entryId}_${rel.relType}_${targetNodeId}_${relIndex}`;
+            if (!g.hasEdge(edgeKey)) {
+                g.addEdgeWithKey(edgeKey, item.entryId, targetNodeId, {
+                    label: RELATION_TARGET_LABEL[rel.relType] || rel.relType,
+                    relType: rel.relType,
+                    size: 1,
+                    color: relationColors[rel.relType] || '#d0d0d0'
+                });
+                edgeCount += 1;
+            }
+            const relName = RELATION_TARGET_LABEL[rel.relType] || rel.relType;
+            edgeTypeCount.set(relName, (edgeTypeCount.get(relName) || 0) + 1);
+        });
+    });
+
+    return {
+        graph: g,
+        metrics: {
+            entries: filteredRows.length,
+            renderedEntries: rows.length,
+            nodes: g.order,
+            edges: g.size,
+            labels: Array.from(new Set(rows.map(v => v.label))).length,
+            types: Array.from(new Set(rows.map(v => v.type))).length,
+            matched: 0,
+            truncated: filteredRows.length > rows.length,
+            edgeTypes: Array.from(edgeTypeCount.entries()).map(([name, count]) => ({ name, count }))
+        }
     };
 }
 
@@ -221,29 +412,81 @@ export function buildKnowledgeGraphData(normalizedList = [], colors = DEFAULT_CO
     };
 }
 
+const KNOWLEDGE_CACHE = {
+    loaded: false,
+    rows: [],
+    promise: null
+};
+
+export function clearKnowledgeCache() {
+    KNOWLEDGE_CACHE.loaded = false;
+    KNOWLEDGE_CACHE.rows = [];
+    KNOWLEDGE_CACHE.promise = null;
+}
+
 export async function fetchAllKnowledges(query = {}, requestArg = {}, options = {}) {
     const pageSize = Number(options.pageSize) > 0 ? Number(options.pageSize) : 100;
     const maxPages = Number(options.maxPages) > 0 ? Number(options.maxPages) : 500;
     const onProgress = typeof options.onProgress === 'function' ? options.onProgress : null;
+    const singleRequest = options.singleRequest !== false;
+    const force = Boolean(options.force);
+    const queryKeys = Object.keys(query || {}).filter(key => query[key] !== '' && query[key] !== undefined && query[key] !== null);
+    const useCache = queryKeys.length === 0;
 
-    const all = [];
-    let total = 0;
+    if (useCache && !force && KNOWLEDGE_CACHE.loaded) return KNOWLEDGE_CACHE.rows;
+    if (useCache && !force && KNOWLEDGE_CACHE.promise) return KNOWLEDGE_CACHE.promise;
 
-    for (let page = 1; page <= maxPages; page += 1) {
-        if (onProgress) onProgress({ page, pageSize, loaded: all.length, total });
-        const r = await api.knowledgeList(
-            { ...query, page, page_size: pageSize },
-            requestArg
-        );
-        if (!r) return null;
+    const runner = (async () => {
+        if (singleRequest) {
+            if (onProgress) onProgress({ page: 1, pageSize: 100000, loaded: 0, total: 0 });
+            const r = await api.knowledgeList(
+                { ...query, page: 1, page_size: 100000 },
+                requestArg
+            );
+            if (!r) return null;
+            const payload = r.data || {};
+            const all = Array.isArray(payload.items) ? payload.items : [];
+            if (useCache) {
+                KNOWLEDGE_CACHE.loaded = true;
+                KNOWLEDGE_CACHE.rows = all;
+            }
+            return all;
+        }
 
-        const payload = r.data || {};
-        const pageItems = Array.isArray(payload.items) ? payload.items : [];
-        if (page === 1) total = Number(payload.total) || pageItems.length;
-        all.push(...pageItems);
+        const all = [];
+        let total = 0;
 
-        if (pageItems.length <= 0 || all.length >= total || pageItems.length < pageSize) break;
+        for (let page = 1; page <= maxPages; page += 1) {
+            if (onProgress) onProgress({ page, pageSize, loaded: all.length, total });
+            const r = await api.knowledgeList(
+                { ...query, page, page_size: pageSize },
+                requestArg
+            );
+            if (!r) return null;
+
+            const payload = r.data || {};
+            const pageItems = Array.isArray(payload.items) ? payload.items : [];
+            if (page === 1) total = Number(payload.total) || pageItems.length;
+            all.push(...pageItems);
+
+            if (pageItems.length <= 0 || all.length >= total || pageItems.length < pageSize) break;
+        }
+
+        if (useCache) {
+            KNOWLEDGE_CACHE.loaded = true;
+            KNOWLEDGE_CACHE.rows = all;
+        }
+        return all;
+    })();
+
+    if (useCache) {
+        KNOWLEDGE_CACHE.promise = runner;
+        try {
+            return await KNOWLEDGE_CACHE.promise;
+        } finally {
+            KNOWLEDGE_CACHE.promise = null;
+        }
     }
 
-    return all;
+    return await runner;
 }

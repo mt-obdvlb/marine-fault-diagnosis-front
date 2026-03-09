@@ -13,7 +13,4 @@ app.component("Markdown",Markdown)
 
 app.use(router)
 
-//DEBUG
-window._debug = app.config.globalProperties.debug = {}
-
 app.mount('#app')

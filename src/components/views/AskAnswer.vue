@@ -14,8 +14,9 @@
           alt=' X' src='/icon/del.svg'></div>
         <div class='addButton buttonEffect'
              title='创建新会话'
-             @click='changeChat(cachedNewChat)'><img alt='add'
-                                     src='/icon/add.svg'>
+             @click='changeChat(cachedNewChat)'><img
+          alt='add'
+          src='/icon/add.svg'>
           <div>创建新会话</div>
         </div>
       </div>
@@ -23,7 +24,7 @@
         <div v-for='cls in chatClasses'>
           <!-- 分界线 -->
           <div v-show='allChats.filter(cls.filter).length>0'
-               style='display:flex;align-items:center;padding:10px;'>
+               style='display:flex;align-items:center;padding:10px;height: 42px;white-space: nowrap;'>
             <div v-show='chatsBarActive'
                  style='padding-left:8px;padding-right:18px;color:var(--holder-color);'>
               {{ cls.className }}
@@ -35,7 +36,8 @@
                :key='chat.timestamp'
                :class="['chatItem',{'buttonEffect':!chat.editing,'active':currentChat==chat}]"
                :title='chat.title'
-               @click='changeChat(chat)'>
+               @click='changeChat(chat)'
+               @contextmenu.prevent='openChatMenu($event,chat,"cursor")'>
             <img alt='C' class='chatIcon'
                  src='/icon/chat.svg'/>
             <span v-show='!chat.editing'
@@ -46,7 +48,8 @@
                    @click.stop
                    @keyup.enter='renameChat(chat,newname)'>
             <img v-show='!chat.editing' alt='...'
-                 class='menuButton buttonEffect' src='/icon/more.svg'
+                 class='menuButton buttonEffect'
+                 src='/icon/more.svg'
                  title='会话设置'
                  @click.stop='openChatMenu($event,chat)'/>
           </div>
@@ -175,34 +178,38 @@
                    src='/icon/del.svg' title='删除'
                    @click='remove(currentChat,msg,true)'>
             </div>
-            <br v-show='!msg.fold'>
-            <div v-show='!msg.fold'
-                 :class="{'foldable':true,thinking:msg.status==='unfinished'}"
-                 style='display: flex;'>
-              <Markdown v-if='msg.text.length>0'
-                        :md='msg.text'
-                        :theme='settings.theme'/>
-              <div v-else> ...</div>
-              <div
-                v-if="i===currentChat.messages.length-1&&msg.status==='stop'"
-                class='continueButton buttonEffect'
-                @click='restream(msg,currentChat)'>
-                <img alt='>' src='/icon/play.svg'
-                     style='width:30px'> 继续回答
-              </div>
-              <div v-if='msg.ref_files.length>0'
-                   class='refFiles'>
-                <div class='filesTitle buttonEffect'
-                     @click='msg.ref_show=!msg.ref_show'>
-                  {{ msg.ref_show ? '∧' : '∨' }} 参考资料
-                  {{ msg.ref_show ? '∧' : '∨' }}
-                </div>
+            <div
+              :class="['answerBody', {'collapsed': msg.fold}]">
+              <div class='answerBodyInner'>
                 <div
-                  :class="['filesItems',{'show':msg.ref_show}]">
-                  <a v-for='file in msg.ref_files'
-                     :href='file.url'
-                     :title='file.name' class='filesItem'
-                     target='_blank'>{{ file.name }}</a>
+                  :class="{'foldable':true,thinking:msg.status==='unfinished'}">
+                  <Markdown v-if='msg.text.length>0'
+                            :md='msg.text'
+                            :theme='settings.theme'/>
+                  <div v-else> ...</div>
+                  <div
+                    v-if="i===currentChat.messages.length-1&&msg.status==='stop'"
+                    class='continueButton buttonEffect'
+                    @click='restream(msg,currentChat)'>
+                    <img alt='>' src='/icon/play.svg'
+                         style='width:30px'> 继续回答
+                  </div>
+                  <div v-if='msg.ref_files.length>0'
+                       class='refFiles'>
+                    <div class='filesTitle buttonEffect'
+                         @click='msg.ref_show=!msg.ref_show'>
+                      {{ msg.ref_show ? '∧' : '∨' }} 参考资料
+                      {{ msg.ref_show ? '∧' : '∨' }}
+                    </div>
+                    <div
+                      :class="['filesItems',{'show':msg.ref_show}]">
+                      <a v-for='file in msg.ref_files'
+                         :href='file.url'
+                         :title='file.name'
+                         class='filesItem'
+                         target='_blank'>{{ file.name }}</a>
+                    </div>
+                  </div>
                 </div>
               </div>
             </div>
@@ -225,11 +232,13 @@
           <div :class="['submitRow',screen.type]">
             <img v-show='submitAllow'
                  alt='提问'
-                 class='submit buttonEffect' src='/icon/submit.svg'
+                 class='submit buttonEffect'
+                 src='/icon/submit.svg'
                  @click='submit'/>
             <img v-show='stopAllow'
                  alt='停止'
-                 class='stop buttonEffect' src='/icon/stop.svg'
+                 class='stop buttonEffect'
+                 src='/icon/stop.svg'
                  @click='stop(currentChat)'/>
           </div>
         </div>
@@ -242,7 +251,6 @@
 import {
   ref,
   reactive,
-  getCurrentInstance,
   computed,
   watch,
   nextTick
@@ -252,8 +260,6 @@ import {screen, API_SERVER_URL} from '@/utils/GLO';
 import {settings} from '@/utils/Settings';
 import F from '@/utils/F';
 import api from '@/utils/api';
-
-let debug = getCurrentInstance().proxy.debug
 
 const currentChat = ref()
 const allChats = reactive([])
@@ -284,9 +290,6 @@ const chatClasses = reactive([
 const inputTextarea = ref()
 const answers = ref()
 const chatMenu = ref()
-
-debug.allChats = allChats
-debug.currentChat = currentChat;
 
 const SupportExport = Blob && URL.createObjectURL && URL.revokeObjectURL
 const isAllFold = computed(() => currentChat.value.messages.every((msg) => msg.fold))
@@ -351,8 +354,7 @@ function sortChats() {
 function toApiUrl(path) {
   if (!path) return ''
   if (/^https?:\/\//.test(path)) return path
-  const base = settings.debugMode ? settings.api_path : API_SERVER_URL
-  return `${base}${path.startsWith('/') ? path : `/${path}`}`
+  return `${API_SERVER_URL}${path.startsWith('/') ? path : `/${path}`}`
 }
 
 function parseStreamJson(buffer) {
@@ -545,33 +547,51 @@ function renameChat(chat, _newname = undefined) {
     newname = chat.title
     chat.editing = true
     nextTick(() => {
-      chatMenuTargetDom.getElementsByClassName('input')[0].focus()
+      const input = chatMenuTargetDom?.getElementsByClassName('input')?.[0]
+      if (input) input.focus()
     })
     
   }
 }
 
-function openChatMenu(event, chat) {
-  let dom = event.target
-  let pos = dom.getClientRects()[0]
-  let menu = chatMenu.value
-  
-  menu.style.top = ''
-  menu.style.left = ''
-  menu.style.bottom = ''
-  menu.style.right = ''
-  if (screen.type == 'hor') {
-    menu.style.top = pos.bottom + 'px'
-    menu.style.left = pos.left + 'px'
-  } else {
-    menu.style.top = pos.top + 'px'
-    menu.style.right = `calc(100% - ${pos.right}px)`
-  }
+function openChatMenu(event, chat, mode = 'button') {
+  const menu = chatMenu.value
+  const dom = event.currentTarget || event.target
+  const parentItem = dom?.closest?.('.chatItem') || dom?.parentElement
   
   chatMenuTarget = chat
-  chatMenuTargetDom = dom.parentElement
-  
+  chatMenuTargetDom = parentItem
   chatMenuActive.value = true
+  
+  nextTick(() => {
+    const menuRect = menu.getBoundingClientRect()
+    let top = 8
+    let left = 8
+    
+    if (mode === 'cursor') {
+      top = event.clientY
+      left = event.clientX
+    } else {
+      const pos = dom.getBoundingClientRect()
+      if (screen.type == 'hor') {
+        top = pos.bottom
+        left = pos.left
+      } else {
+        top = pos.top
+        left = pos.right - menuRect.width
+      }
+    }
+    
+    const maxTop = Math.max(8, window.innerHeight - menuRect.height - 8)
+    const maxLeft = Math.max(8, window.innerWidth - menuRect.width - 8)
+    top = Math.min(Math.max(8, top), maxTop)
+    left = Math.min(Math.max(8, left), maxLeft)
+    
+    menu.style.top = `${top}px`
+    menu.style.left = `${left}px`
+    menu.style.right = ''
+    menu.style.bottom = ''
+  })
 }
 
 function changeHandler(text = undefined, add = false) {
@@ -617,15 +637,6 @@ async function genAns(question, addTo = currentChat.value) {
   if (question.length <= 0) return false
   
   let body = {}
-  if (settings.debugMode) {
-    try {
-      body = JSON.parse(settings.api_arg)
-    } catch (e) {
-      eventBus.emit('dialog', {text: '请求体参数解析错误，请检测是否是正确的json'})
-      console.error(e)
-      return
-    }
-  }
   // 新添会话
   if (allChats.indexOf(addTo) < 0) {
     addTo.title = question
@@ -658,13 +669,6 @@ async function genAns(question, addTo = currentChat.value) {
   })
   
   let messages = []
-  //DEBUG
-  //滤去请求失败的对话
-  // chats.value.forEach((ch)=>{
-  //     if(ch.status=='error') return;
-  //     messages.push({role:'user',content:ch.question})
-  //     messages.push({role:'assistant',content:ch.text})
-  // })
   messages.push({role: 'user', content: question})
   body.messages = body.messages || messages
   body.session_id = body.session_id || addTo.session_id
@@ -1363,7 +1367,7 @@ loadChats()
 }
 
 .toolbar.hor {
-  height: 10px;
+  height: 30px;
   padding-top: 0;
   border: 2px solid silver;
   border-top: none;
@@ -1528,6 +1532,24 @@ loadChats()
 .foldable {
   display: flex;
   flex-direction: column;
+}
+
+.answerBody {
+  display: grid;
+  grid-template-rows: 1fr;
+  transition: grid-template-rows .25s ease, opacity .2s ease, margin-top .25s ease;
+  margin-top: 8px;
+}
+
+.answerBody.collapsed {
+  grid-template-rows: 0fr;
+  opacity: 0;
+  margin-top: 0;
+}
+
+.answerBodyInner {
+  overflow: hidden;
+  min-height: 0;
 }
 
 .continueButton {
