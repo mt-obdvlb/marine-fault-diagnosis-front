@@ -240,6 +240,15 @@ fn label_color(label: &str) -> String {
     }
 }
 
+fn node_size_by_degree(degree: usize) -> f64 {
+    let d = degree as f64;
+    if d <= 8.0 {
+        4.0 + d * 2.2
+    } else {
+        (21.6 + (d - 7.0).log2() * 1.4).min(26.0)
+    }
+}
+
 #[tauri::command]
 fn compute_graph_projection(payload: ProjectionPayload) -> ProjectionResult {
     let selected_labels: HashSet<String> = payload.selected_labels.into_iter().collect();
@@ -279,6 +288,8 @@ fn compute_graph_projection(payload: ProjectionPayload) -> ProjectionResult {
 
     let mut nodes: Vec<ProjectionNode> = Vec::with_capacity(rows.len());
     let mut node_id_set: HashSet<String> = HashSet::with_capacity(rows.len() * 2);
+    let mut node_index: HashMap<String, usize> = HashMap::with_capacity(rows.len() * 2);
+    let mut degree_count: HashMap<String, usize> = HashMap::with_capacity(rows.len() * 2);
     let mut rel_counter: HashMap<String, HashMap<String, u32>> = HashMap::with_capacity(rows.len());
     let mut labels_set: HashSet<String> = HashSet::new();
     let mut types_set: HashSet<String> = HashSet::new();
@@ -308,7 +319,9 @@ fn compute_graph_projection(payload: ProjectionPayload) -> ProjectionResult {
             color: label_color(&row.label),
             search_text: row.search_text.clone(),
         });
+        node_index.insert(row.entry_id.clone(), nodes.len() - 1);
         node_id_set.insert(row.entry_id.clone());
+        degree_count.insert(row.entry_id.clone(), 0);
         rel_counter.insert(row.entry_id.clone(), HashMap::new());
         labels_set.insert(row.label.clone());
         types_set.insert(row.db_type.clone());
@@ -351,6 +364,8 @@ fn compute_graph_projection(payload: ProjectionPayload) -> ProjectionResult {
                     color: "#c0c0c0".to_string(),
                     search_text: format!("{} {}", rel.target_identifier, relation_display_name(&rel.rel_type)),
                 });
+                node_index.insert(target_entry_id.clone(), nodes.len() - 1);
+                degree_count.insert(target_entry_id.clone(), 0);
             }
 
             let edge_key = format!(
@@ -372,6 +387,8 @@ fn compute_graph_projection(payload: ProjectionPayload) -> ProjectionResult {
                 color: relation_color(&rel.rel_type),
             });
             edge_count += 1;
+            *degree_count.entry(row.entry_id.clone()).or_insert(0) += 1;
+            *degree_count.entry(target_entry_id.clone()).or_insert(0) += 1;
             *edge_type_count
                 .entry(relation_display_name(&rel.rel_type))
                 .or_insert(0) += 1;
@@ -381,6 +398,14 @@ fn compute_graph_projection(payload: ProjectionPayload) -> ProjectionResult {
             }
             if let Some(counter) = rel_counter.get_mut(&target_entry_id) {
                 *counter.entry(rel.rel_type.clone()).or_insert(0) += 1;
+            }
+        }
+    }
+
+    for (node_id, degree) in degree_count.iter() {
+        if let Some(index) = node_index.get(node_id) {
+            if let Some(node) = nodes.get_mut(*index) {
+                node.size = node_size_by_degree(*degree);
             }
         }
     }

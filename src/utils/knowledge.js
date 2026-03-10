@@ -230,6 +230,7 @@ export function buildKnowledgeRelationGraphData(normalizedList = [], options = {
     };
 
     const edgeTypeCount = new Map();
+    const degreeCount = new Map();
     let edgeCount = 0;
 
     const nodeProgressStep = Math.max(1, Math.floor(rows.length / 40));
@@ -256,6 +257,7 @@ export function buildKnowledgeRelationGraphData(normalizedList = [], options = {
             color: labelPalette[item.label] || labelPalette.未分类,
             searchText: item.searchText
         });
+        degreeCount.set(item.entryId, 0);
         if (onProgress && (idx % nodeProgressStep === 0 || idx === rows.length - 1)) {
             const ratio = (idx + 1) / Math.max(rows.length, 1);
             onProgress({ phase: 'nodes', percent: Math.min(0.62, 0.12 + ratio * 0.5), rows: rows.length, total: filteredRows.length });
@@ -285,6 +287,7 @@ export function buildKnowledgeRelationGraphData(normalizedList = [], options = {
                     color: '#c0c0c0',
                     searchText: `${rel.targetIdentifier} ${rel.relName}`.toLowerCase()
                 });
+                degreeCount.set(targetNodeId, degreeCount.get(targetNodeId) || 0);
             }
 
             const edgeKey = `${item.entryId}_${rel.relType}_${targetNodeId}_${relIndex}`;
@@ -296,6 +299,8 @@ export function buildKnowledgeRelationGraphData(normalizedList = [], options = {
                     color: relationColors[rel.relType] || '#d0d0d0'
                 });
                 edgeCount += 1;
+                degreeCount.set(item.entryId, (degreeCount.get(item.entryId) || 0) + 1);
+                degreeCount.set(targetNodeId, (degreeCount.get(targetNodeId) || 0) + 1);
             }
             const relName = RELATION_TARGET_LABEL[rel.relType] || rel.relType;
             edgeTypeCount.set(relName, (edgeTypeCount.get(relName) || 0) + 1);
@@ -303,6 +308,18 @@ export function buildKnowledgeRelationGraphData(normalizedList = [], options = {
         if (onProgress && (idx % edgeProgressStep === 0 || idx === rows.length - 1)) {
             const ratio = (idx + 1) / Math.max(rows.length, 1);
             onProgress({ phase: 'edges', percent: Math.min(0.98, 0.62 + ratio * 0.36), rows: rows.length, total: filteredRows.length });
+        }
+    });
+
+    const nodeSizeByDegree = (degree = 0) => {
+        const d = Math.max(0, Number(degree) || 0);
+        if (d <= 8) return 4 + d * 2.2;
+        return Math.min(26, 21.6 + Math.log2(d - 7) * 1.4);
+    };
+    degreeCount.forEach((degree, nodeId) => {
+        if (g.hasNode(nodeId)) {
+            g.setNodeAttribute(nodeId, 'size', nodeSizeByDegree(degree));
+            g.setNodeAttribute(nodeId, 'degree', degree);
         }
     });
 

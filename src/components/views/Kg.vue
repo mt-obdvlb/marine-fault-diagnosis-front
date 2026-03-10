@@ -434,6 +434,46 @@ function drawSelectedEdgeFlow(ctx, ts) {
   });
 }
 
+function drawOverlayEdges(ctx, edgeKeys, options = {}) {
+  if (!renderer || !graph || !edgeKeys || !edgeKeys.size) return;
+  const stroke = options.stroke || '#8ed0ff';
+  const width = options.width || 2.2;
+  const alpha = options.alpha ?? 0.85;
+  const glow = options.glow || 8;
+  ctx.save();
+  ctx.globalAlpha = alpha;
+  ctx.strokeStyle = stroke;
+  ctx.lineWidth = width;
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+  ctx.shadowColor = stroke;
+  ctx.shadowBlur = glow;
+  edgeKeys.forEach((edgeKey) => {
+    if (!graph.hasEdge(edgeKey)) return;
+    const [source, target] = graph.extremities(edgeKey);
+    if (!graph.hasNode(source) || !graph.hasNode(target)) return;
+    const s = graph.getNodeAttributes(source);
+    const t = graph.getNodeAttributes(target);
+    const sp = renderer.graphToViewport({x: s.x, y: s.y});
+    const tp = renderer.graphToViewport({x: t.x, y: t.y});
+    const mx = (sp.x + tp.x) / 2;
+    const my = (sp.y + tp.y) / 2;
+    const dx = tp.x - sp.x;
+    const dy = tp.y - sp.y;
+    const len = Math.max(1, Math.hypot(dx, dy));
+    const nx = -dy / len;
+    const ny = dx / len;
+    const curve = Math.min(44, Math.max(12, len * 0.18));
+    const cx = mx + nx * curve;
+    const cy = my + ny * curve;
+    ctx.beginPath();
+    ctx.moveTo(sp.x, sp.y);
+    ctx.quadraticCurveTo(cx, cy, tp.x, tp.y);
+    ctx.stroke();
+  });
+  ctx.restore();
+}
+
 function drawLabelPill(ctx, x, y, text, options = {}) {
   const content = String(text || '').trim();
   if (!content) return;
@@ -490,6 +530,21 @@ function drawEffectFrame(ts = performance.now()) {
   const hasSelection = Boolean(selectedNodeId.value);
   const hasHover = Boolean(hoveredNodeId.value);
   if (!hasSelection && !hasHover) return;
+  if (hasSelection && selectedEdgeSet.value.size) {
+    drawOverlayEdges(ctx, selectedEdgeSet.value, {
+      stroke: '#8ed0ff',
+      width: 2.8,
+      alpha: 0.9,
+      glow: 10
+    });
+  } else if (hasHover && hoverEdgeSet.value.size) {
+    drawOverlayEdges(ctx, hoverEdgeSet.value, {
+      stroke: '#9fe6ff',
+      width: 2.2,
+      alpha: 0.82,
+      glow: 8
+    });
+  }
   drawSelectedEdgeFlow(ctx, ts);
   if (hasSelection) drawRippleAtNode(ctx, selectedNodeId.value, ts, true);
   if (hasHover && hoveredNodeId.value !== selectedNodeId.value) {
@@ -773,9 +828,7 @@ function installReducers() {
 
     if (selectedNodeId.value) {
       if (connectedToSelected) {
-        next.size = Math.max(2.8, (data.size || 1) * 3.2);
-        next.zIndex = 4;
-        next.color = brightenColor(data.color || accentColor.value, 1.32);
+        next.hidden = true;
       } else {
         next.size = 0.25;
         next.zIndex = 1;
@@ -786,9 +839,7 @@ function installReducers() {
 
     if (hoveredNodeId.value) {
       if (connectedToHovered) {
-        next.size = Math.max(1.8, (data.size || 1) * 1.95);
-        next.zIndex = 3;
-        next.color = brightenColor(data.color || accentColor.value, 1.2);
+        next.hidden = true;
       } else {
         next.size = Math.max(0.2, (data.size || 1) * 0.5);
         next.zIndex = 1;
