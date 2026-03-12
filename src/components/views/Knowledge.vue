@@ -19,21 +19,21 @@
 </template>
 
 <script setup>
-// import Usage from './Knowledge/Usage.vue';
-// import LibraryForm from './Knowledge/LibraryForm.vue';
+import Usage from './Knowledge/Usage.vue';
+import LibraryForm from './Knowledge/LibraryForm.vue';
 import LibraryManage from './Knowledge/LibraryManage.vue';
 import {shallowRef} from 'vue';
 import {screen} from '@/utils/GLO';
 
 const panels = [
-  // {
-  //   name: '导入说明',
-  //   component: Usage,
-  // },
-  // {
-  //   name: '条目录入',
-  //   component: LibraryForm,
-  // },
+  {
+    name: '导入说明',
+    component: Usage,
+  },
+  {
+    name: '条目录入',
+    component: LibraryForm,
+  },
   {
     name: '维护与概览',
     component: LibraryManage,

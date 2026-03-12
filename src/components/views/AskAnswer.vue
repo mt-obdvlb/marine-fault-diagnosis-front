@@ -1227,6 +1227,7 @@ async function exportChat(chat, format) {
   if (data) {
     const defaultFileName = `${chat.session_id}${ext}`
     let exported = false
+    let cancelled = false
     try {
       const [{save}, {invoke}] = await Promise.all([
         import('@tauri-apps/plugin-dialog'),
@@ -1245,11 +1246,13 @@ async function exportChat(chat, format) {
           content: data
         })
         exported = true
+      } else {
+        cancelled = true
       }
     } catch (e) {
       console.warn('tauri save failed, fallback to browser download', e)
     }
-    if (!exported) {
+    if (!exported && !cancelled) {
       let _a = document.createElement('a')
       _a.style.display = 'none'
       document.body.appendChild(_a)

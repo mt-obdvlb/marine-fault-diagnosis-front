@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "SigmaFlow",
+  "productName": "船舶装备故障诊断智能问答系统",
   "version": "0.1.0",
   "identifier": "com.mtobdvlb.sigmaflow",
   "build": {
@@ -13,7 +13,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "SigmaFlow",
+        "title": "船舶装备故障诊断智能问答系统",
         "width": 1440,
         "height": 900,
         "minWidth": 1100,

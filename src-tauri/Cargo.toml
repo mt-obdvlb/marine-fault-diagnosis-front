@@ -1,7 +1,7 @@
 [package]
 name = "sigmaflow-desktop"
 version = "0.1.0"
-description = "Tauri desktop shell for the SigmaFlow Vue app"
+description = "Tauri desktop shell for the ship equipment fault diagnosis QA app"
 authors = ["Codex"]
 edition = "2021"
 

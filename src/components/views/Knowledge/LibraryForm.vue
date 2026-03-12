@@ -1,295 +1,355 @@
 <template>
-    <div class="panelArea">
-        <div v-show="loading" class="loading">
-            <img class="autoInvert" src="/icon/loading.svg" alt="">
-            处理中
-        </div>
-
-        <div class="formCard">
-            <div class="row">
-                <UiSelect v-model="form.label" :options="labelSelectOptions" class="input" />
-                <input v-model.trim="form.identifier" class="input" type="text" placeholder="知识编号，例如：R0437">
-                <UiSelect v-model="form.type" :options="dbTypeOptions" class="input small" />
-            </div>
-
-            <textarea
-                v-model.trim="form.desc"
-                class="textarea"
-                placeholder="知识描述，例如：控制设备接线错误"
-            ></textarea>
-
-            <div class="relationCard">
-                <div class="relationTitle">关系指向（可选）</div>
-                <div class="relationGrid">
-                    <div v-for="item in relationOptions" :key="item.key" class="relationItem">
-                        <div class="relationLabel">{{ item.label }} ({{ item.key }})</div>
-                        <input
-                            v-model.trim="form.relationships[item.key]"
-                            class="input"
-                            type="text"
-                            :placeholder="`目标知识编号，例如：${item.example}`"
-                        >
-                    </div>
-                </div>
-            </div>
-
-            <div class="actions">
-                <div class="func buttonEffect" @click="addKnowledge">新增知识条目</div>
-                <div class="func buttonEffect" @click="openUpload">批量导入</div>
-                <div class="func buttonEffect" @click="buildIndex">重建索引</div>
-                <input type="file" ref="fileSelector" class="hiddenInput" accept=".txt,.jsonl,.pdf" multiple @change="importFiles">
-            </div>
-
-            <div class="row compact">
-                <UiSelect v-model="uploadMeta.type" :options="dbTypeOptions" class="input small" />
-                <UiSelect v-model="uploadMeta.label" :options="uploadLabelOptions" class="input" />
-            </div>
-        </div>
+  <div class='panelArea'>
+    <div v-show='loading' class='loading'>
+      <img alt='' class='autoInvert'
+           src='/icon/loading.svg'>
+      导入中
     </div>
+    
+    <div class='formCard'>
+      <div class='header'>
+        <div>
+          <div class='eyebrow'>Knowledge Import</div>
+          <div class='title'>上传 JSON 数组文件</div>
+        </div>
+        <div class='badge'>后端自动识别来源</div>
+      </div>
+      
+      <div class='desc'>
+        这里只接收一个 <code>.json</code> 文件，文件内容应为知识对象数组。
+      </div>
+      
+      <div
+        :class="['dropZone', { active: dragActive }]"
+        @click='openUpload'
+        @dragenter.prevent='dragActive = true'
+        @dragover.prevent='dragActive = true'
+        @dragleave.prevent='dragActive = false'
+        @drop.prevent='handleDrop'
+      >
+        <div class='dropIcon'>[]</div>
+        <div class='dropTitle'>拖拽 JSON 到这里</div>
+        <div class='dropSub'>或者点击选择文件</div>
+        <div class='dropHint'>仅支持数组 JSON，例如 <code>[{...},
+          {...}]</code></div>
+        <div v-if='selectedFileName' class='fileTag'>
+          已选择：{{ selectedFileName }}
+        </div>
+      </div>
+      
+      <div class='tips'>
+        <div>
+          建议字段：<code>identifier</code>、<code>label</code>、<code>desc</code>
+        </div>
+        <div><code>relationships</code> 里的值填写目标知识编号，例如
+          <code>R0001</code></div>
+      </div>
+      
+      <div class='actions'>
+        <div class='func primary buttonEffect'
+             @click='openUpload'>选择 JSON 文件
+        </div>
+        <div class='func buttonEffect' @click='buildIndex'>
+          重建索引
+        </div>
+      </div>
+      
+      <input
+        ref='fileSelector'
+        accept='.json,application/json'
+        class='hiddenInput'
+        type='file'
+        @change='handleInputChange'
+      >
+    </div>
+  </div>
 </template>
 
 <script setup>
-import { computed, reactive, ref } from 'vue';
+import {ref} from 'vue';
 import eventBus from '@/utils/eventBus';
 import api from '@/utils/api';
-import { LABEL_OPTIONS, RELATION_TARGET_LABEL } from '@/utils/knowledge';
-import UiSelect from '@/components/ui/UiSelect.vue';
 
 const loading = ref(false);
+const dragActive = ref(false);
+const selectedFileName = ref('');
 const fileSelector = ref();
-const labelOptions = LABEL_OPTIONS;
-const DB_TYPE_OPTIONS = [
-    { value: 'dynamic', text: '用户库' },
-    { value: 'static', text: '内置库' }
-];
-const relationOptions = Object.entries(RELATION_TARGET_LABEL).map(([key, label]) => ({
-    key,
-    label,
-    example: key === 'relationship_solution' ? 'S0437' : 'C0437'
-}));
-const labelSelectOptions = computed(() => labelOptions.map((label) => ({
-    label,
-    value: label
-})));
-const dbTypeOptions = computed(() => DB_TYPE_OPTIONS.map((dbType) => ({
-    label: dbType.text,
-    value: dbType.value
-})));
-const uploadLabelOptions = computed(() => [
-    { label: '导入默认标签（可选）', value: '' },
-    ...labelOptions.map((label) => ({ label, value: label }))
-]);
-
-function createEmptyForm() {
-    return {
-        label: '故障原因',
-        identifier: '',
-        desc: '',
-        type: 'dynamic',
-        relationships: {
-            relationship_fault: '',
-            relationship_reason: '',
-            relationship_solution: '',
-            relationship_component: '',
-            relationship_precaution: '',
-            relationship_material: ''
-        }
-    };
-}
-
-const form = reactive(createEmptyForm());
-
-const uploadMeta = reactive({
-    type: 'dynamic',
-    label: ''
-});
-
-function resetForm() {
-    const next = createEmptyForm();
-    Object.assign(form, next);
-}
-
-async function addKnowledge() {
-    if (!form.identifier || !form.desc || !form.label) {
-        eventBus.emit('dialog', { text: '请填写标签、知识编号和知识描述' });
-        return;
-    }
-
-    const relationships = {};
-    Object.entries(form.relationships).forEach(([key, value]) => {
-        const text = String(value || '').trim();
-        if (text) relationships[key] = text;
-    });
-
-    const payload = {
-        label: form.label,
-        identifier: form.identifier,
-        desc: form.desc,
-        type: form.type,
-        relationships,
-        // 兼容旧字段
-        name: `${form.label}-${form.identifier}`,
-        category: form.label,
-        equipment: form.label
-    };
-
-    loading.value = true;
-    try {
-        const r = await api.knowledgeAdd(payload, { errorText: '新增知识失败' });
-        if (!r) return;
-        eventBus.emit('dialog', { text: r.message || '知识条目添加成功' });
-        resetForm();
-    } finally {
-        loading.value = false;
-    }
-}
 
 function openUpload() {
-    fileSelector.value.value = '';
-    fileSelector.value.click();
+  fileSelector.value.value = '';
+  fileSelector.value.click();
 }
 
-async function importFiles(event) {
-    const files = [...(event.target.files || [])];
-    if (files.length <= 0) return;
+function validateJsonArrayPayload(payload) {
+  if (!Array.isArray(payload)) {
+    throw new Error('JSON 顶层必须是数组，例如 [{...}, {...}]');
+  }
+  
+  const rows = payload.filter((item) => item && typeof item === 'object' && !Array.isArray(item));
+  if (rows.length <= 0) {
+    throw new Error('JSON 数组中未找到可导入的对象');
+  }
+  
+  if (rows.length !== payload.length) {
+    throw new Error('JSON 数组中的每一项都必须是对象');
+  }
+  
+  return rows;
+}
 
-    loading.value = true;
-    try {
-        const results = await Promise.all(files.map(async (file) => {
-            const formData = new FormData();
-            formData.append('file', file);
-            formData.append('type', uploadMeta.type);
-            if (uploadMeta.label) formData.append('label', uploadMeta.label);
-            return api.knowledgeImport(formData, {
-                errorText: `${file.name} 导入失败`,
-                onError(text, e) {
-                    console.error(text, e);
-                    eventBus.emit('dialog', { text: `${file.name} 导入失败：${text}` });
-                }
-            });
-        }));
+async function buildUploadFile(file) {
+  const lowerName = String(file?.name || '').toLowerCase();
+  if (!lowerName.endsWith('.json')) {
+    throw new Error('仅支持上传 .json 文件');
+  }
+  
+  const text = await file.text();
+  let parsed;
+  try {
+    parsed = JSON.parse(text);
+  } catch (error) {
+    throw new Error('JSON 文件解析失败，请检查语法');
+  }
+  
+  const rows = validateJsonArrayPayload(parsed).map((item) => JSON.stringify(item));
+  const fileName = file.name.replace(/\.json$/i, '') || 'knowledge_import';
+  return new File(
+    [rows.join('\n')],
+    `${fileName}.jsonl`,
+    {type: 'application/x-ndjson'}
+  );
+}
 
-        if (results.some(Boolean)) {
-            eventBus.emit('dialog', { text: '文件导入完成，建议执行一次重建索引' });
-        }
-    } finally {
-        loading.value = false;
-    }
+async function importFile(file) {
+  if (!file) return;
+  loading.value = true;
+  selectedFileName.value = file.name;
+  
+  try {
+    const uploadFile = await buildUploadFile(file);
+    const formData = new FormData();
+    formData.append('file', uploadFile);
+    const r = await api.knowledgeImport(formData, {
+      errorText: `${file.name} 导入失败`,
+      onError(text, e) {
+        console.error(text, e);
+        eventBus.emit('dialog', {text: `${file.name} 导入失败：${text}`});
+      }
+    });
+    if (!r) return;
+    eventBus.emit('dialog', {text: `${file.name} 导入完成，建议执行一次重建索引`});
+  } catch (error) {
+    console.error(error);
+    eventBus.emit('dialog', {text: error?.message || 'JSON 导入失败'});
+  } finally {
+    loading.value = false;
+  }
+}
+
+function handleInputChange(event) {
+  const file = event.target.files?.[0];
+  importFile(file);
+}
+
+function handleDrop(event) {
+  dragActive.value = false;
+  const file = event.dataTransfer?.files?.[0];
+  importFile(file);
 }
 
 async function buildIndex() {
-    loading.value = true;
-    try {
-        const r = await api.knowledgeBuildIndex({ errorText: '索引重建失败' });
-        if (!r) return;
-        const info = r.data ? `\n已索引 ${r.data.indexed_count} 条，耗时 ${r.data.time_cost_ms} ms` : '';
-        eventBus.emit('dialog', { text: `${r.message || '索引重建成功'}${info}` });
-    } finally {
-        loading.value = false;
-    }
+  loading.value = true;
+  try {
+    const r = await api.knowledgeBuildIndex({errorText: '索引重建失败'});
+    if (!r) return;
+    const info = r.data ? `\n已索引 ${r.data.indexed_count} 条，耗时 ${r.data.time_cost_ms} ms` : '';
+    eventBus.emit('dialog', {text: `${r.message || '索引重建成功'}${info}`});
+  } finally {
+    loading.value = false;
+  }
 }
 </script>
 
 <style scoped>
-.panelArea{
-    position: relative;
-    display: flex;
-    flex-direction: column;
-    gap: 10px;
-    height: 100%;
+.panelArea {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  height: 100%;
 }
-.loading{
-    position: absolute;
-    inset: 0;
-    background-color: rgba(125, 125, 125, 0.451);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    z-index: 7;
+
+.loading {
+  position: absolute;
+  inset: 0;
+  background-color: rgba(125, 125, 125, 0.451);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 7;
 }
-.formCard{
-    display: flex;
-    flex-direction: column;
-    gap: 12px;
-    padding: 12px;
-    border-radius: 14px;
-    background-color: var(--subBgColor);
+
+.formCard {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 18px;
+  border-radius: 18px;
+  background: radial-gradient(circle at top right, rgba(0, 168, 132, 0.12), transparent 30%),
+  linear-gradient(160deg, rgba(8, 44, 77, 0.08), rgba(14, 116, 144, 0.03)),
+  var(--subBgColor);
 }
-.row{
-    display: flex;
-    gap: 10px;
+
+.header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
 }
-.row.compact .input{
-    max-width: 220px;
+
+.eyebrow {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  opacity: 0.65;
 }
-.input,
-.textarea{
-    box-sizing: border-box;
-    border: 1px solid var(--subBgColor);
-    border-radius: 10px;
-    background-color: var(--bgColor);
-    color: var(--text-color);
-    padding: 10px 12px;
-    font-size: 14px;
+
+.title {
+  font-size: 26px;
+  font-weight: 800;
+  line-height: 1.2;
 }
-.input{
-    flex: 1;
+
+.badge {
+  padding: 8px 12px;
+  border-radius: 999px;
+  background-color: rgba(0, 168, 132, 0.12);
+  color: #0a7f67;
+  font-size: 13px;
+  font-weight: 700;
 }
-.input.small{
-    max-width: 140px;
+
+.desc {
+  line-height: 1.8;
+  opacity: 0.92;
 }
-.textarea{
-    width: 100%;
-    min-height: 120px;
-    resize: vertical;
+
+.desc code,
+.dropHint code,
+.tips code {
+  padding: 2px 6px;
+  border-radius: 6px;
+  background-color: rgba(0, 0, 0, 0.08);
 }
-.relationCard{
-    padding: 10px;
-    border-radius: 12px;
-    background-color: var(--bgColor);
-    border: 1px solid var(--subBgColor);
+
+.dropZone {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  min-height: 240px;
+  padding: 24px;
+  border: 2px dashed rgba(10, 127, 103, 0.35);
+  border-radius: 20px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.45), rgba(255, 255, 255, 0.12)),
+  radial-gradient(circle at center, rgba(0, 168, 132, 0.12), transparent 55%);
+  text-align: center;
+  cursor: pointer;
+  transition: transform 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease;
 }
-.relationTitle{
-    font-weight: 700;
-    margin-bottom: 8px;
+
+.dropZone.active {
+  transform: translateY(-2px) scale(1.01);
+  border-color: #0a7f67;
+  box-shadow: 0 18px 40px rgba(10, 127, 103, 0.16);
 }
-.relationGrid{
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 8px;
+
+.dropIcon {
+  display: grid;
+  place-items: center;
+  width: 72px;
+  height: 72px;
+  border-radius: 18px;
+  background: linear-gradient(135deg, #0a7f67, #10b981);
+  color: #fff;
+  font-size: 28px;
+  font-weight: 800;
+  box-shadow: 0 12px 24px rgba(16, 185, 129, 0.28);
 }
-.relationItem{
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
+
+.dropTitle {
+  font-size: 22px;
+  font-weight: 800;
 }
-.relationLabel{
-    font-size: 12px;
-    color: var(--holder-color);
+
+.dropSub {
+  font-size: 15px;
+  opacity: 0.8;
 }
-.actions{
-    display: flex;
-    flex-wrap: wrap;
-    gap: 8px;
+
+.dropHint {
+  font-size: 14px;
+  opacity: 0.75;
 }
-.func{
-    background-color: var(--bgColor);
-    border: 1px solid var(--subBgColor);
-    border-radius: 9px;
-    padding: 8px 14px;
-    font-size: 14px;
+
+.fileTag {
+  margin-top: 6px;
+  padding: 8px 12px;
+  border-radius: 999px;
+  background-color: rgba(10, 127, 103, 0.12);
+  color: #0a7f67;
+  font-weight: 700;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
-.hiddenInput{
-    display: none;
+
+.tips {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 14px;
+  border-radius: 14px;
+  background-color: var(--bgColor);
+  line-height: 1.7;
 }
-@media (max-width: 900px){
-    .row,
-    .relationGrid{
-        display: flex;
-        flex-direction: column;
-    }
-    .input.small{
-        max-width: none;
-    }
+
+.actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.func {
+  padding: 10px 16px;
+  border-radius: 12px;
+  background-color: var(--bgColor);
+  border: 1px solid var(--subBgColor);
+  cursor: pointer;
+  user-select: none;
+}
+
+.func.primary {
+  background: linear-gradient(135deg, #0a7f67, #10b981);
+  color: #fff;
+  border-color: transparent;
+}
+
+.hiddenInput {
+  display: none;
+}
+
+@media (max-width: 720px) {
+  .title {
+    font-size: 22px;
+  }
+  
+  .dropZone {
+    min-height: 200px;
+    padding: 20px;
+  }
 }
 </style>
