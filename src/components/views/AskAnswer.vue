@@ -129,6 +129,7 @@
         </div>
         <div ref='answers' :class="['answers',screen.type]">
           <div v-for='(msg,i) in currentChat.messages'
+               :key='msg.local_key'
                :class="['msg',msg.status]">
             <div class='questionBar'>
               <!-- 折叠按钮 -->
@@ -187,9 +188,14 @@
               <div class='answerBodyInner'>
                 <div
                   :class="{'foldable':true,thinking:msg.status==='unfinished'}">
-                  <Markdown v-if='msg.text.length>0'
-                            :md='msg.text'
-                            :theme='settings.theme'/>
+                  <template v-if='msg.text.length>0'>
+                    <div v-if="msg.status==='unfinished'"
+                         class='streamText'>{{ msg.text }}
+                    </div>
+                    <Markdown v-else
+                              :md='msg.text'
+                              :theme='settings.theme'/>
+                  </template>
                   <div v-else> ...</div>
                   <div
                     v-if="i===currentChat.messages.length-1&&msg.status==='stop'"
@@ -213,7 +219,7 @@
                          class='filesItem'
                          target='_blank'>{{ file.name }}</a>
                       <div
-                        v-if='msg.ref_html||msg.ref_html_url'
+                        v-if='msg.ref_files.length>0||msg.ref_html_url'
                         class='filesItem filesItemButton buttonEffect'
                         @click='viewSingleQaReferences(msg)'>
                         在应用内查看参考文献
@@ -230,8 +236,8 @@
            :style='referencePaneStyle'
            class='referencePane'>
         <div class='referenceToolbar'>
-          <div class='referenceTitle'
-               :title='referencePreview.title'>
+          <div :title='referencePreview.title'
+               class='referenceTitle'>
             {{ referencePreview.title || '参考文献' }}
           </div>
           <div class='referenceActions'>
@@ -243,15 +249,18 @@
                   @click='referencePreview.visible=false'>关闭</span>
           </div>
         </div>
-        <div v-if='referencePreview.loading' class='referenceEmpty'>参考文献加载中...</div>
-        <div v-else-if='referencePreview.error' class='referenceEmpty'>{{ referencePreview.error }}</div>
-        <iframe v-if='referencePreview.html'
-                :srcdoc='referencePreview.html'
-                class='referenceFrame'></iframe>
-        <iframe v-else-if='referencePreview.url'
+        <div v-if='referencePreview.loading'
+             class='referenceEmpty'>参考文献加载中...
+        </div>
+        <div v-else-if='referencePreview.error'
+             class='referenceEmpty'>
+          {{ referencePreview.error }}
+        </div>
+        <iframe v-if='referencePreview.url'
                 :src='referencePreview.url'
                 class='referenceFrame'></iframe>
-        <div v-else class='referenceEmpty'>暂无可展示内容</div>
+        <div v-else class='referenceEmpty'>暂无可展示内容
+        </div>
         <div class='referenceResizeHandle'
              title='拖拽调整参考面板高度'
              @mousedown='startResizeReferencePane'></div>
@@ -331,7 +340,6 @@ const chatClasses = reactive([
 const inputTextarea = ref()
 const answers = ref()
 const chatMenu = ref()
-const supportsWorker = typeof Worker !== 'undefined'
 
 const SupportExport = typeof Blob !== 'undefined' &&
   typeof URL !== 'undefined' &&
@@ -340,7 +348,6 @@ const SupportExport = typeof Blob !== 'undefined' &&
 const referencePreview = reactive({
   visible: false,
   title: '',
-  html: '',
   url: '',
   loading: false,
   error: ''
@@ -411,18 +418,6 @@ function toApiUrl(path) {
   if (!path) return ''
   if (/^https?:\/\//.test(path)) return path
   return `${API_SERVER_URL}${path.startsWith('/') ? path : `/${path}`}`
-}
-
-async function fetchReferenceHtmlByUrl(url) {
-  if (!url) return ''
-  try {
-    const response = await fetch(url)
-    if (!response.ok) return ''
-    return await response.text()
-  } catch (e) {
-    console.error('reference html fetch failed', e)
-    return ''
-  }
 }
 
 function normalizeSelectedPath(path) {
@@ -499,6 +494,59 @@ function parseStreamJson(buffer) {
   return {objects, rest: buffer}
 }
 
+function mergeStreamContent(msg, content, {isFinal = false} = {}) {
+  if (!msg || !content) return
+  const current = msg.answer || ''
+
+  if (isFinal) {
+    // Some providers send a full final answer on the last packet.
+    // When it clearly looks like the whole answer, replace instead of append.
+    const looksFullFinal = current.length > 0 &&
+      content.length >= current.length &&
+      content.startsWith(current.slice(0, Math.min(24, current.length)))
+    if (looksFullFinal) {
+      msg.answer = content
+      return
+    }
+  }
+
+  msg.answer = current + content
+}
+
+function syncFinalAnswerFromServer(chat, msg, retry = 0) {
+  if (!chat?.session_id || !msg || msg.final_synced) return
+  if (!msg.id) {
+    if (retry < 6) {
+      setTimeout(() => syncFinalAnswerFromServer(chat, msg, retry + 1), 250 * (retry + 1))
+    }
+    return
+  }
+  return api.qaList(chat.session_id, {
+    onError(text, e) {
+      console.error(text, e)
+    }
+  }).then((r) => {
+    const rows = Array.isArray(r?.data) ? r.data : []
+    const remote = rows.find(item => item?.question_id === msg.id)
+    const remoteAnswer = remote?.answer || ''
+    if (!remoteAnswer) {
+      if (retry < 6) {
+        setTimeout(() => syncFinalAnswerFromServer(chat, msg, retry + 1), 250 * (retry + 1))
+      }
+      return
+    }
+    msg.answer = remoteAnswer
+    msg.force_answer_sync = remoteAnswer
+    msg.id = msg.id || remote?.question_id || null
+    msg.final_synced = true
+  }).catch((e) => {
+    console.error('syncFinalAnswerFromServer failed', e)
+    if (retry < 6) {
+      setTimeout(() => syncFinalAnswerFromServer(chat, msg, retry + 1), 250 * (retry + 1))
+    }
+  })
+}
+
 function changeChat(chat, closeBar = true) {
   currentChat.value = chat
   referencePreview.visible = false
@@ -508,6 +556,7 @@ function changeChat(chat, closeBar = true) {
       r.data.forEach(msg => {
         //define message
         const localMsg = reactive({
+          local_key: `qa-${msg.question_id || `${chat.session_id}-${chat.messages.length}`}`,
           question: msg.question,
           id: msg.question_id,
           answer: msg.answer,
@@ -520,9 +569,10 @@ function changeChat(chat, closeBar = true) {
           fold: false,
           ref_files: [],
           ref_show: false,
-          ref_html: '',
           ref_html_url: '',
-          rag_sources: msg.rag_sources || []
+          rag_sources: msg.rag_sources || [],
+          final_synced: true,
+          force_answer_sync: ''
         })
         chat.messages.push(localMsg)
         if (localMsg.status === 'finished') loadReferences(localMsg)
@@ -760,19 +810,22 @@ async function genAns(question, addTo = currentChat.value) {
   }
   //define message
   let msg = reactive({
+    local_key: `local-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`,
     question,
     id: null,
     answer: '',
     text: '',
     status: 'unfinished',
     receiveAll: false,
+    rendering: false,
     controller: new AbortController(),
     fold: false,
     ref_files: [],
     ref_show: false,
-    ref_html: '',
     ref_html_url: '',
-    rag_sources: []
+    rag_sources: [],
+    final_synced: false,
+    force_answer_sync: ''
   })
   
   let messages = []
@@ -805,21 +858,25 @@ async function genAns(question, addTo = currentChat.value) {
         if (done) {
           addTo.timestamp = new Date() / 1000
           msg.receiveAll = true
+          syncFinalAnswerFromServer(addTo, msg)
           sortChats()
           return;
         }
-        result += decoder.decode(value, {stream: true});
+        const chunkText = decoder.decode(value, {stream: true})
+        result += chunkText
         const parsed = parseStreamJson(result)
         result = parsed.rest
         for (const obj of parsed.objects) {
-          if (obj['choices']?.[0]?.message?.content) {
-            msg.answer += obj['choices'][0]['message']['content'];
+          const content = obj['choices']?.[0]?.message?.content
+          if (content) {
+            mergeStreamContent(msg, content, {isFinal: Boolean(obj['final'])})
           }
           if (obj['final']) {
             addTo.timestamp = obj.created || new Date() / 1000
             msg.id = obj['id']
             msg.rag_sources = obj['rag_sources'] || []
             msg.receiveAll = true
+            syncFinalAnswerFromServer(addTo, msg)
             sortChats()
           }
         }
@@ -838,32 +895,55 @@ async function genAns(question, addTo = currentChat.value) {
 }
 
 function rendChat(msg, chat) {
+  if (msg.rendering) return
+  msg.rendering = true
+  
   //将接收到的答案显示出来
   let i = msg.text.length
   let _scroll = i === 0
-  let updateInt = null, updateTimer = null
+  let renderInt = null
   const FPS = 20
   if (settings.printByWord) {
     //逐字显示
-    let _toAppend = '', text = msg.text
+    let text = msg.text
     const WordsATick = 1 / FPS * settings.charPerSecond
     let left = 0, endFlag = 0
-    let textAddInt = null, textAddTimer = null
+    
+    function appendPendingText() {
+      if (i >= msg.answer.length) return false
+      const nextIndex = i + WordsATick + left
+      text += msg.answer.substring(i, nextIndex)
+      i = text.length
+      left = nextIndex % 1
+      return true
+    }
     
     //回答停止
     function _end() {
-      if (supportsWorker) {
-        textAddTimer.postMessage(['clearTimer'])
-        updateTimer.postMessage(['clearTimer'])
-      } else {
-        clearInterval(textAddInt);
-        clearInterval(updateInt)
-      }
+      clearInterval(renderInt)
       msg.text = text
+      msg.rendering = false
+    }
+    
+    function commitText() {
+      if (msg.text != text) {
+        msg.text = text
+      }
     }
     
     //循环往答案中加字
     function _textAdd() {
+      if (msg.force_answer_sync) {
+        msg.answer = msg.force_answer_sync
+        msg.force_answer_sync = ''
+        msg.receiveAll = true
+        // keep typing animation: continue rendering toward the synced final answer
+        if (text.length > msg.answer.length) {
+          text = msg.answer
+          i = text.length
+          commitText()
+        }
+      }
       if (i >= 1 && _scroll) {
         setTimeout(() => answers.value.scrollTo(0, Number.MAX_SAFE_INTEGER), 500)
         _scroll = false
@@ -880,13 +960,15 @@ function rendChat(msg, chat) {
         })
         syncQaRenderProgress(chat, msg, msg.text.length)
         return
-      } else if (msg.status === 'unfinished') {
-        if (i < msg.answer.length) {
-          _toAppend = msg.answer.substring(i, i + WordsATick + left)
-          text += _toAppend
-          i = text.length
-          left = (WordsATick + left) % 1
-        } else if (msg.receiveAll) {
+      }
+      
+      if (appendPendingText()) {
+        commitText()
+        return
+      }
+      
+      if (msg.status === 'unfinished') {
+        if (msg.receiveAll) {
           if (i < msg.answer.length) {
             endFlag = 0
             return;
@@ -895,17 +977,11 @@ function rendChat(msg, chat) {
             return
           }
           _end()
-          msg.text = text
+          commitText()
           msg.status = 'finished'
           syncQaRenderProgress(chat, msg, msg.text.length)
           loadReferences(msg)
         }
-      }
-      if (i < msg.answer.length) {
-        _toAppend = msg.answer.substring(i, i + WordsATick + left)
-        text += _toAppend
-        i = text.length
-        left = (WordsATick + left) % 1
       } else if (msg.status !== 'unfinished') {
         if (i < msg.answer.length) {
           endFlag = 0
@@ -915,34 +991,29 @@ function rendChat(msg, chat) {
           return
         }
         _end()
-        msg.text = text
+        commitText()
       }
     }
     
-    //更新渲染对话
-    function _update() {
-      if (msg.text != text) msg.text = text
-    }
-    
-    //保证兼容性
-    if (supportsWorker) {
-      textAddTimer = new Worker('./js/timer.js')
-      updateTimer = new Worker('./js/timer.js')
-      textAddTimer.onmessage = _textAdd
-      updateTimer.onmessage = _update
-      textAddTimer.postMessage(['setTimer', 1000 / FPS])
-      updateTimer.postMessage(['setTimer', 1000 / FPS])
-    } else {
-      textAddInt = setInterval(_textAdd, 1000 / FPS)
-      updateInt = setInterval(_update, 1000 / FPS)
-    }
+    renderInt = setInterval(_textAdd, 1000 / FPS)
   } else {
     function _end() {
-      if (supportsWorker) updateTimer.postMessage(['clearTimer'])
-      else clearInterval(updateInt)
+      clearInterval(renderInt)
+      msg.rendering = false
     }
     
     function _update() {
+      if (msg.force_answer_sync) {
+        msg.answer = msg.force_answer_sync
+        msg.text = msg.force_answer_sync
+        msg.force_answer_sync = ''
+        msg.receiveAll = true
+        msg.status = 'finished'
+        _end()
+        syncQaRenderProgress(chat, msg, msg.text.length)
+        loadReferences(msg)
+        return
+      }
       if (msg.receiveAll) {
         _end()
         msg.text = msg.answer
@@ -974,13 +1045,7 @@ function rendChat(msg, chat) {
       }
     }
     
-    if (supportsWorker) {
-      updateTimer = new Worker('./js/timer.js')
-      updateTimer.onmessage = _update
-      updateTimer.postMessage(['setTimer', 1000 / FPS])
-    } else {
-      updateInt = setInterval(_update, 1000 / FPS)
-    }
+    renderInt = setInterval(_update, 1000 / FPS)
   }
 }
 
@@ -995,7 +1060,6 @@ function loadReferences(msg) {
     if (!r || !r.data) return
     const docUrl = toApiUrl(r.data.html_url || '')
     msg.ref_html_url = docUrl
-    msg.ref_html = r.data.html || ''
     let files = []
     ;(r.data.reference_files || []).forEach((file, index) => {
       const url = toApiUrl(file?.url || docUrl)
@@ -1027,13 +1091,7 @@ function loadReferences(msg) {
       })
     })
     msg.ref_files = files
-    if (!msg.ref_html && docUrl) {
-      fetchReferenceHtmlByUrl(docUrl).then((html) => {
-        if (html) msg.ref_html = html
-      })
-    }
     return {
-      html: msg.ref_html,
       url: msg.ref_html_url,
       files: msg.ref_files
     }
@@ -1058,22 +1116,13 @@ function viewSingleQaReferences(msg) {
   referencePreview.visible = true
   referencePreview.loading = true
   referencePreview.error = ''
-  referencePreview.html = ''
   referencePreview.url = ''
   loadReferences(msg)?.then((data) => {
     referencePreview.loading = false
     referencePreview.url = data?.url || msg.ref_html_url || msg.ref_files?.[0]?.url || ''
-    referencePreview.html = data?.html || msg.ref_html || ''
-    if (!referencePreview.html && !referencePreview.url) {
+    if (!referencePreview.url) {
       referencePreview.error = '该条问答暂无参考文献'
       return
-    }
-    if (!referencePreview.html && referencePreview.url) {
-      fetchReferenceHtmlByUrl(referencePreview.url).then((html) => {
-        if (!html) return
-        msg.ref_html = html
-        referencePreview.html = html
-      })
     }
   }).catch(() => {
     referencePreview.loading = false
@@ -1834,6 +1883,12 @@ onBeforeUnmount(() => {
 .foldable {
   display: flex;
   flex-direction: column;
+}
+
+.streamText {
+  white-space: pre-wrap;
+  word-break: break-word;
+  line-height: 1.75;
 }
 
 .answerBody {

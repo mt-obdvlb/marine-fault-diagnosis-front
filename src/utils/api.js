@@ -105,14 +105,12 @@ const api = {
   referenceGet(questionId, arg = {}, opt = {}) {
     return F.myFetchApi(`/v1/reference_files?question_id=${encodeURIComponent(questionId)}`, {...arg}, opt).then((r) => {
       if (!r) return r;
-      const payload = r.data && typeof r.data === 'object' ? r.data : r;
-      const files = Array.isArray(payload.reference_files) ? payload.reference_files : [];
-      const firstUrl = files[0]?.url || payload.html_url || payload.url || '';
+      const files = Array.isArray(r.reference_files) ? r.reference_files : [];
+      const firstUrl = files[0]?.url || '';
       return {
         ...r,
         data: {
           html_url: firstUrl,
-          html: typeof payload.html === 'string' ? payload.html : '',
           reference_files: files,
           knowledge_items: files.map((file) => ({
             name: file?.name || '',
