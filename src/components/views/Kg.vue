@@ -95,6 +95,13 @@
       <div>关系: {{ metrics.edges }}</div>
       <div v-if='selectedNodeId' class='focusTip'>
         <span>当前焦点: {{ selectedNodeLabel || selectedNodeId }}</span>
+        <button
+          v-if='selectedNodeCanDelete'
+          class='dangerBtn'
+          @click='deleteSelectedNode'
+        >
+          删除节点
+        </button>
         <button class='closeFocusBtn' @click='clearSelection'>关闭</button>
       </div>
       <div>label种类: {{ metrics.labels }}</div>
@@ -114,11 +121,15 @@ import FA2Layout from 'graphology-layout-forceatlas2/worker';
 import forceAtlas2 from 'graphology-layout-forceatlas2';
 import noverlap from 'graphology-layout-noverlap';
 import EdgeCurveProgram from '@sigma/edge-curve';
+import eventBus from '@/utils/eventBus';
+import {settings} from '@/utils/Settings';
+import api from '@/utils/api';
 import {
   DB_TYPE_OPTIONS,
   LABEL_OPTIONS,
   buildKnowledgeRelationGraphFromProjection,
   buildKnowledgeRelationGraphData,
+  clearKnowledgeCache,
   collectKnowledgeFacets,
   fetchAllKnowledges,
   normalizeKnowledgeList
@@ -191,6 +202,32 @@ const RELATION_PULSE_COLORS = {
   relationship_material: '#4f7cff',
   default: '#2db7f5'
 };
+
+function getSelectedNodeAttrs() {
+  if (!graph || !selectedNodeId.value || !graph.hasNode(selectedNodeId.value)) return null;
+  return graph.getNodeAttributes(selectedNodeId.value);
+}
+
+function selectedNodeIsDynamic() {
+  const attrs = getSelectedNodeAttrs();
+  return attrs?.dbType === 'dynamic';
+}
+
+function selectedNodeIdentifier() {
+  const attrs = getSelectedNodeAttrs();
+  return attrs?.id || selectedNodeId.value || '';
+}
+
+function selectedNodeCategory() {
+  const attrs = getSelectedNodeAttrs();
+  return attrs?.kind || '';
+}
+
+const selectedNodeCanDelete = ref(false);
+
+function syncSelectedNodeState() {
+  selectedNodeCanDelete.value = selectedNodeIsDynamic();
+}
 
 function getNoverlapSettings(nodeCount) {
   if (nodeCount <= 500) {
@@ -691,6 +728,7 @@ function refreshRender() {
 function clearSelection() {
   selectedNodeId.value = '';
   selectedNodeLabel.value = '';
+  selectedNodeCanDelete.value = false;
   selectedNeighborSet.value = new Set();
   rebuildEdgeSets();
   drawEffectFrame();
@@ -879,6 +917,7 @@ function bindGraphEvents() {
       const attrs = graph.getNodeAttributes(node);
       selectedNodeLabel.value = attrs?.desc || attrs?.label || node;
     } else selectedNodeLabel.value = node;
+    syncSelectedNodeState();
     rebuildNeighborSet(node, selectedNeighborSet);
     rebuildEdgeSets();
     drawEffectFrame();
@@ -930,6 +969,55 @@ function bindGraphEvents() {
   });
 }
 
+function deleteSelectedNode() {
+  if (!selectedNodeCanDelete.value) {
+    eventBus.emit('dialog', {text: '当前节点不是用户知识，不能删除。'});
+    return;
+  }
+  
+  const identifier = selectedNodeIdentifier();
+  const label = selectedNodeCategory();
+  if (!identifier) return;
+  
+  const run = async () => {
+    startLoading('正在删除节点', `删除 ${identifier} ...`);
+    try {
+      const r = await api.knowledgeDelete(
+        {identifier, label},
+        {errorText: `${identifier} 删除失败`}
+      );
+      if (!r) {
+        loadingOverlay.value.visible = false;
+        return;
+      }
+      clearSelection();
+      clearKnowledgeCache();
+      eventBus.emit('knowledge:refresh');
+      eventBus.emit('dialog', {text: r.message || `${identifier} 删除成功`});
+    } catch (e) {
+      console.error(e);
+      loadingOverlay.value.visible = false;
+      statusText.value = `删除失败：${e?.message || '未知错误'}`;
+    }
+  };
+  
+  if (settings.comfBefDelKnow) {
+    eventBus.emit('dialog', {
+      text: `确定删除 ${identifier} 吗？`,
+      onYes(checkVal) {
+        settings.comfBefDelKnow = checkVal;
+        run();
+      },
+      checkText: '每次删除都提示确认',
+      checkVal: true,
+      type: 'yes_no'
+    });
+    return;
+  }
+  
+  run();
+}
+
 function onKeydown(e) {
   if (!renderer) return;
   const camera = renderer.getCamera();
@@ -965,6 +1053,7 @@ function initRenderer(newGraph) {
   selectedNodeId.value = '';
   selectedNodeLabel.value = '';
   hoveredNodeId.value = '';
+  selectedNodeCanDelete.value = false;
   selectedNeighborSet.value = new Set();
   hoverNeighborSet.value = new Set();
   selectedEdgeSet.value = new Set();
@@ -1004,6 +1093,32 @@ async function applyFiltersAndRender() {
   startLoading('正在构建知识图谱', '准备筛选数据...');
   
   try {
+    const filteredRows = getFilteredRowsForLayout();
+    if (filteredRows.length === 0) {
+      clearLayoutResources();
+      stopAnimationLoop();
+      if (renderer) {
+        renderer.kill();
+        renderer = null;
+      }
+      graph = null;
+      metrics.value = {
+        entries: 0,
+        renderedEntries: 0,
+        nodes: 0,
+        edges: 0,
+        labels: 0,
+        types: 0,
+        matched: 0,
+        truncated: false
+      };
+      statusText.value = '当前筛选条件下没有可显示的知识图谱';
+      loadingOverlay.value.visible = false;
+      graphReady.value = false;
+      clearFxCanvas();
+      return;
+    }
+
     const maxNodes = Math.max(allRows.value.length, 8000);
     const maxEdges = Math.min(maxNodes * 4, 24000);
     const selectedLabelList = Array.from(selectedLabels.value);
@@ -1024,7 +1139,7 @@ async function applyFiltersAndRender() {
     if (projection?.nodes && projection?.edges) {
       built = buildKnowledgeRelationGraphFromProjection(projection);
     } else {
-      const layoutRows = getFilteredRowsForLayout().slice(0, maxNodes);
+      const layoutRows = filteredRows.slice(0, maxNodes);
       updateLoading(44, '正在构建知识图谱', 'Rust 不可用，回退 JS 构图...');
       const rustLayout = await computeGraphLayoutWithRust(layoutRows);
       const layoutPositions = rustLayout?.positions && typeof rustLayout.positions === 'object'
@@ -1092,11 +1207,14 @@ async function loadData() {
         statusText.value = '正在加载知识...';
         updateLoading(22, '正在加载知识数据', '正在拉取知识列表...');
       }
+    }, {
+      force: true
     }
   );
   
   if (!Array.isArray(rows) || rows.length === 0) {
     statusText.value = '无可用数据';
+    loadingOverlay.value.visible = false;
     return;
   }
   
@@ -1117,20 +1235,28 @@ async function loadData() {
   await applyFiltersAndRender();
 }
 
+async function refreshKgData() {
+  clearKnowledgeCache();
+  await loadData();
+}
+
 onMounted(async () => {
   window.addEventListener('keydown', onKeydown);
   window.addEventListener('resize', refreshRender);
+  eventBus.on('knowledge:refresh', refreshKgData);
   try {
     await loadData();
   } catch (e) {
     console.error(e);
     statusText.value = `数据加载失败：${e?.message || '未知错误'}`;
+    loadingOverlay.value.visible = false;
   }
 });
 
 onBeforeUnmount(() => {
   window.removeEventListener('keydown', onKeydown);
   window.removeEventListener('resize', refreshRender);
+  eventBus.off('knowledge:refresh', refreshKgData);
   stopAnimationLoop();
   clearLayoutResources();
   if (renderer) renderer.kill();
@@ -1388,6 +1514,17 @@ onBeforeUnmount(() => {
   border: 1px solid var(--card-border);
   background: var(--subBgColor4);
   color: var(--text-color);
+  border-radius: 999px;
+  height: 22px;
+  padding: 0 8px;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.dangerBtn {
+  border: 1px solid rgba(196, 43, 28, 0.24);
+  background: rgba(196, 43, 28, 0.1);
+  color: #b42318;
   border-radius: 999px;
   height: 22px;
   padding: 0 8px;

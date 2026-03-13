@@ -131,13 +131,14 @@
 </template>
 
 <script setup>
-import {computed, reactive, ref} from 'vue';
+import {computed, onBeforeUnmount, onMounted, reactive, ref} from 'vue';
 import eventBus from '@/utils/eventBus';
 import {settings} from '@/utils/Settings';
 import api from '@/utils/api';
 import UiSelect from '@/components/ui/UiSelect.vue';
 import {
   buildKnowledgeOverview,
+  clearKnowledgeCache,
   collectKnowledgeFacets,
   fetchAllKnowledges,
   filterKnowledges,
@@ -202,7 +203,7 @@ function applyFilters() {
 async function reloadData() {
   loading.value = true;
   try {
-    const rows = await fetchAllKnowledges({}, {errorText: '知识列表获取失败'});
+    const rows = await fetchAllKnowledges({}, {errorText: '知识列表获取失败'}, {force: true});
     if (!rows) return;
     allItems.value = normalizeKnowledgeList(rows);
     const facets = collectKnowledgeFacets(allItems.value);
@@ -241,6 +242,8 @@ function delItem(item) {
         {errorText: `${item.identifier} 删除失败`}
       );
       if (!r) return;
+      clearKnowledgeCache();
+      eventBus.emit('knowledge:refresh');
       eventBus.emit('dialog', {text: r.message || '删除成功'});
       await reloadData();
     } finally {
@@ -265,7 +268,19 @@ function delItem(item) {
   run();
 }
 
-reloadData();
+function handleKnowledgeRefresh() {
+  clearKnowledgeCache();
+  reloadData();
+}
+
+onMounted(() => {
+  eventBus.on('knowledge:refresh', handleKnowledgeRefresh);
+  reloadData();
+});
+
+onBeforeUnmount(() => {
+  eventBus.off('knowledge:refresh', handleKnowledgeRefresh);
+});
 </script>
 
 <style scoped>

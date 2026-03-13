@@ -27,8 +27,16 @@ const api = {
     return Promise.all([userReq, innerReq]).then(([userRes, innerRes]) => {
       if (!userRes && !innerRes) return userRes || innerRes;
       
-      const userItems = Array.isArray(userRes?.data) ? userRes.data : [];
-      const innerItems = Array.isArray(innerRes?.data) ? innerRes.data : [];
+      const userItems = (Array.isArray(userRes?.data) ? userRes.data : []).map((item) => ({
+        ...item,
+        type: item?.type || item?.db_type || 'dynamic',
+        db_type: item?.db_type || item?.type || 'dynamic'
+      }));
+      const innerItems = (Array.isArray(innerRes?.data) ? innerRes.data : []).map((item) => ({
+        ...item,
+        type: item?.type || item?.db_type || 'static',
+        db_type: item?.db_type || item?.type || 'static'
+      }));
       const merged = [...userItems, ...innerItems];
       
       const page = Number(query?.page) > 0 ? Number(query.page) : 1;

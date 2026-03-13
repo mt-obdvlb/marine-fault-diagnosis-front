@@ -10,44 +10,42 @@
       <div class='header'>
         <div>
           <div class='eyebrow'>Knowledge Import</div>
-          <div class='title'>上传 JSON 数组文件</div>
+          <div class='title'>上传 JSONL 文件</div>
         </div>
-        <div class='badge'>后端自动识别来源</div>
+        <div class='badge'>用户知识库导入</div>
       </div>
       
       <div class='desc'>
-        这里只接收一个 <code>.json</code> 文件，文件内容应为知识对象数组。
+        这里只接收一个 <code>.jsonl</code> 文件，每行一个知识对象。
+        前端不传来源分类，后端按用户导入处理。
       </div>
       
       <div
-        :class="['dropZone', { active: dragActive }]"
+        :class="['dropZone', {active: dragActive}]"
         @click='openUpload'
         @dragenter.prevent='dragActive = true'
         @dragover.prevent='dragActive = true'
         @dragleave.prevent='dragActive = false'
         @drop.prevent='handleDrop'
       >
-        <div class='dropIcon'>[]</div>
-        <div class='dropTitle'>拖拽 JSON 到这里</div>
+        <div class='dropIcon'>{ }</div>
+        <div class='dropTitle'>拖拽 JSONL 到这里</div>
         <div class='dropSub'>或者点击选择文件</div>
-        <div class='dropHint'>仅支持数组 JSON，例如 <code>[{...},
-          {...}]</code></div>
+        <div class='dropHint'>格式为每行一个 JSON 对象</div>
         <div v-if='selectedFileName' class='fileTag'>
           已选择：{{ selectedFileName }}
         </div>
       </div>
       
       <div class='tips'>
-        <div>
-          建议字段：<code>identifier</code>、<code>label</code>、<code>desc</code>
-        </div>
-        <div><code>relationships</code> 里的值填写目标知识编号，例如
-          <code>R0001</code></div>
+        <div>推荐字段：<code>identifier</code>、<code>label</code>、<code>desc</code></div>
+        <div><code>relationships</code> 的值填写目标知识编号，例如 <code>R0001</code></div>
+        <div>上传成功后会清理本地缓存，并通知知识列表重新拉取</div>
       </div>
       
       <div class='actions'>
         <div class='func primary buttonEffect'
-             @click='openUpload'>选择 JSON 文件
+             @click='openUpload'>选择 JSONL 文件
         </div>
         <div class='func buttonEffect' @click='buildIndex'>
           重建索引
@@ -56,7 +54,7 @@
       
       <input
         ref='fileSelector'
-        accept='.json,application/json'
+        accept='.jsonl,application/x-ndjson,application/jsonl,text/plain'
         class='hiddenInput'
         type='file'
         @change='handleInputChange'
@@ -69,6 +67,7 @@
 import {ref} from 'vue';
 import eventBus from '@/utils/eventBus';
 import api from '@/utils/api';
+import {clearKnowledgeCache} from '@/utils/knowledge';
 
 const loading = ref(false);
 const dragActive = ref(false);
@@ -80,44 +79,29 @@ function openUpload() {
   fileSelector.value.click();
 }
 
-function validateJsonArrayPayload(payload) {
-  if (!Array.isArray(payload)) {
-    throw new Error('JSON 顶层必须是数组，例如 [{...}, {...}]');
-  }
-  
-  const rows = payload.filter((item) => item && typeof item === 'object' && !Array.isArray(item));
-  if (rows.length <= 0) {
-    throw new Error('JSON 数组中未找到可导入的对象');
-  }
-  
-  if (rows.length !== payload.length) {
-    throw new Error('JSON 数组中的每一项都必须是对象');
-  }
-  
-  return rows;
-}
-
-async function buildUploadFile(file) {
+async function validateJsonlFile(file) {
   const lowerName = String(file?.name || '').toLowerCase();
-  if (!lowerName.endsWith('.json')) {
-    throw new Error('仅支持上传 .json 文件');
+  if (!lowerName.endsWith('.jsonl')) {
+    throw new Error('仅支持上传 .jsonl 文件');
   }
   
   const text = await file.text();
-  let parsed;
-  try {
-    parsed = JSON.parse(text);
-  } catch (error) {
-    throw new Error('JSON 文件解析失败，请检查语法');
+  const lines = text.split(/\r?\n/).map(line => line.trim()).filter(Boolean);
+  if (lines.length <= 0) {
+    throw new Error('JSONL 文件内容为空');
   }
   
-  const rows = validateJsonArrayPayload(parsed).map((item) => JSON.stringify(item));
-  const fileName = file.name.replace(/\.json$/i, '') || 'knowledge_import';
-  return new File(
-    [rows.join('\n')],
-    `${fileName}.jsonl`,
-    {type: 'application/x-ndjson'}
-  );
+  lines.forEach((line, index) => {
+    let row;
+    try {
+      row = JSON.parse(line);
+    } catch (error) {
+      throw new Error(`第 ${index + 1} 行不是合法的 JSON`);
+    }
+    if (!row || typeof row !== 'object' || Array.isArray(row)) {
+      throw new Error(`第 ${index + 1} 行必须是 JSON 对象`);
+    }
+  });
 }
 
 async function importFile(file) {
@@ -126,9 +110,9 @@ async function importFile(file) {
   selectedFileName.value = file.name;
   
   try {
-    const uploadFile = await buildUploadFile(file);
+    await validateJsonlFile(file);
     const formData = new FormData();
-    formData.append('file', uploadFile);
+    formData.append('file', file);
     const r = await api.knowledgeImport(formData, {
       errorText: `${file.name} 导入失败`,
       onError(text, e) {
@@ -137,10 +121,12 @@ async function importFile(file) {
       }
     });
     if (!r) return;
-    eventBus.emit('dialog', {text: `${file.name} 导入完成，建议执行一次重建索引`});
+    clearKnowledgeCache();
+    eventBus.emit('knowledge:refresh');
+    eventBus.emit('dialog', {text: `${file.name} 导入完成，已刷新知识列表缓存`});
   } catch (error) {
     console.error(error);
-    eventBus.emit('dialog', {text: error?.message || 'JSON 导入失败'});
+    eventBus.emit('dialog', {text: error?.message || 'JSONL 导入失败'});
   } finally {
     loading.value = false;
   }
@@ -162,6 +148,8 @@ async function buildIndex() {
   try {
     const r = await api.knowledgeBuildIndex({errorText: '索引重建失败'});
     if (!r) return;
+    clearKnowledgeCache();
+    eventBus.emit('knowledge:refresh');
     const info = r.data ? `\n已索引 ${r.data.indexed_count} 条，耗时 ${r.data.time_cost_ms} ms` : '';
     eventBus.emit('dialog', {text: `${r.message || '索引重建成功'}${info}`});
   } finally {
@@ -236,7 +224,6 @@ async function buildIndex() {
 }
 
 .desc code,
-.dropHint code,
 .tips code {
   padding: 2px 6px;
   border-radius: 6px;
